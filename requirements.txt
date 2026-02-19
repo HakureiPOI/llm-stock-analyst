@@ -54,3 +54,4 @@ uuid_utils==0.14.0
 websocket-client==1.9.0
 xxhash==3.6.0
 zstandard==0.25.0
+cachetools==7.0.1

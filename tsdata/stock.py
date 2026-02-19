@@ -1,8 +1,10 @@
 from .client import pro
+from .cache import cached_data
 
 class StockData:
     """股票数据获取类"""
-    
+
+    @cached_data()
     def get_stock_basic(self, ts_code="", name="", exchange="", market="", is_hs="", list_status="", limit="", offset=""):
         """
         获取股票基本信息
@@ -48,7 +50,8 @@ class StockData:
             "delist_date",
             "is_hs"
         ])
-    
+
+    @cached_data()
     def get_daily(self, ts_code="", trade_date="", start_date="", end_date="", limit="", offset=""):
         """
         获取股票日K线数据
@@ -84,7 +87,8 @@ class StockData:
             "vol",
             "amount"
         ])
-    
+
+    @cached_data()
     def get_adj_factor(self, ts_code="", trade_date="", start_date="", end_date="", limit="", offset=""):
         """
         获取股票复权因子数据
@@ -112,7 +116,8 @@ class StockData:
             "trade_date",
             "adj_factor"
         ])
-    
+
+    @cached_data()
     def get_daily_basic(self, ts_code="", trade_date="", start_date="", end_date="", limit="", offset=""):
         """
         获取股票每日基本面指标数据
@@ -156,7 +161,8 @@ class StockData:
             "circ_mv",
             "limit_status"
         ])
-    
+
+    @cached_data()
     def get_income(self, ts_code, ann_date="", f_ann_date="", start_date="", end_date="", period="", report_type="", comp_type="", is_calc="", limit="", offset=""):
         """
         获取股票利润表数据
@@ -285,7 +291,8 @@ class StockData:
             "total_opcost",
             "amodcost_fin_assets"
         ])
-    
+
+    @cached_data()
     def get_balancesheet(self, ts_code, ann_date="", f_ann_date="", start_date="", end_date="", period="", report_type="", comp_type="", limit="", offset=""):
         """
         获取股票资产负债表数据
@@ -476,7 +483,8 @@ class StockData:
             "use_right_assets",
             "lease_liab"
         ])
-    
+
+    @cached_data()
     def get_cashflow(self, ts_code, ann_date="", f_ann_date="", start_date="", end_date="", period="", report_type="", comp_type="", is_calc="", limit="", offset=""):
         """
         获取股票现金流量表数据
@@ -608,7 +616,8 @@ class StockData:
             "beg_bal_cash_equ",
             "update_flag"
         ])
-    
+
+    @cached_data()
     def get_fina_indicator(self, ts_code, ann_date="", start_date="", end_date="", period="", update_flag="", limit="", offset=""):
         """
         获取股票财务指标数据

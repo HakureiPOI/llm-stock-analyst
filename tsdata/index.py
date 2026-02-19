@@ -1,8 +1,10 @@
 from .client import pro
+from .cache import cached_data
 
 class IndexData:
     """指数数据获取类"""
     
+    @cached_data()
     def get_index_basic(self, ts_code="", market="", publisher="", category="", name="", limit="", offset=""):
         """
         获取指数基本信息
@@ -42,7 +44,8 @@ class IndexData:
             "desc",
             "exp_date"
         ])
-    
+
+    @cached_data()
     def get_index_daily(self, ts_code, trade_date="", start_date="", end_date="", limit="", offset=""):
         """
         获取指数日K线数据
@@ -78,7 +81,8 @@ class IndexData:
             "vol",
             "amount"
         ])
-    
+
+    @cached_data()
     def get_index_weight(self, index_code="", trade_date="", start_date="", end_date="", ts_code="", limit="", offset=""):
         """
         获取指数成分股权重数据
@@ -109,7 +113,8 @@ class IndexData:
             "trade_date",
             "weight"
         ])
-    
+
+    @cached_data()
     def get_index_dailybasic(self, trade_date="", ts_code="", start_date="", end_date="", limit="", offset=""):
         """
         获取指数每日基本面指标数据
