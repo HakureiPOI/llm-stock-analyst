@@ -27,6 +27,11 @@ from .analysis_tools import (
     get_indicator_explanation,
 )
 
+from .common_tools import (
+    get_current_time,
+    get_stock_market_status,
+)
+
 __all__ = [
     # 股票工具
     "get_stock_basic_info",
@@ -48,4 +53,7 @@ __all__ = [
     "analyze_index_technical",
     "analyze_stock_signals",
     "get_indicator_explanation",
+    # 通用工具
+    "get_current_time",
+    "get_stock_market_status",
 ]

@@ -38,6 +38,9 @@ from tools import (
     analyze_index_technical,
     analyze_stock_signals,
     get_indicator_explanation,
+    # 通用工具
+    get_current_time,
+    get_stock_market_status,
 )
 
 dotenv.load_dotenv()
@@ -49,6 +52,10 @@ DB_URI = os.getenv("DB_URI")
 SYSTEM_PROMPT = """你是一位专业的股票分析师和投资顾问，擅长技术分析、基本面分析和市场趋势判断。
 
 你拥有以下工具:
+
+**通用工具:**
+- get_current_time: 获取当前世界时间，包括UTC时间和本地时间
+- get_stock_market_status: 获取当前中国股市交易状态（开市/休市）
 
 **股票数据工具:**
 - get_stock_basic_info: 查询股票基础信息（代码、名称、行业、上市日期等）
@@ -140,6 +147,9 @@ def create_stock_agent(use_memory=True):
         analyze_index_technical,
         analyze_stock_signals,
         get_indicator_explanation,
+        # 通用工具
+        get_current_time,
+        get_stock_market_status,
     ]
     
     # 选择检查点保存器
