@@ -97,7 +97,7 @@ SYSTEM_PROMPT = """你是一位专业的股票分析师和投资顾问，擅长�
 @dataclass
 class Context:
     """自定义运行时上下文"""
-    user_id: str
+    user_id: str = '1'
     session_id: Optional[str] = None
 
 
@@ -166,63 +166,10 @@ def create_stock_agent(use_memory=True):
         tools=tools,
         context_schema=Context,
         # response_format=ToolStrategy(AnalysisResponse),  # 暂时禁用结构化输出
-        checkpointer=checkpointer
+        # checkpointer=checkpointer     # LangSmith测试暂时禁用checkpoint
     )
     
     return agent
 
+agent = create_stock_agent(use_memory=False)
 
-# 主函数
-def main():
-    """测试股票分析智能体"""
-    print("=" * 60)
-    print("股票分析智能体测试")
-    print("=" * 60)
-    
-    # 创建智能体
-    agent = create_stock_agent(use_memory=False)
-    
-    # 配置线程ID
-    config = {"configurable": {"thread_id": "stock_analysis_001"}}
-    
-    # 测试对话
-    test_queries = [
-        "帮我分析一下贵州茅台(600519.SH)的股票情况",
-        "贵州茅台最近的技术指标表现如何？有没有买卖信号？",
-        "平安银行(000001.SZ)的财务状况怎么样？",
-        "上证指数最近表现如何？",
-    ]
-    
-    for i, query in enumerate(test_queries, 1):
-        print(f"\n{'='*60}")
-        print(f"【问题 {i}】{query}")
-        print(f"{'='*60}")
-        
-        try:
-            response = agent.invoke(
-                {"messages": [{"role": "user", "content": query}]},
-                config=config,
-                context=Context(user_id="test_user", session_id="session_001")
-            )
-            
-            # 打印响应消息
-            messages = response.get('messages', [])
-            if messages:
-                last_msg = messages[-1]
-                content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
-                print(f"\n【回复】\n{content}")
-            else:
-                print(f"\n【回复】\n{response}")
-                
-        except Exception as e:
-            print(f"❌ 错误: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    print(f"\n{'='*60}")
-    print("测试完成")
-    print(f"{'='*60}")
-
-
-if __name__ == "__main__":
-    main()

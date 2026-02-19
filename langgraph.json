@@ -1,0 +1,20 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "my_agent": "./agents/stock_agent.py:agent"
+  },
+  "env": ".env",
+  "python_version": "3.11",
+  "checkpointer": {
+    "ttl": {
+      "default_ttl": 2592000,
+      "sweep_interval_minutes": 60
+    }
+  },
+  "store": {
+    "ttl": {
+      "default_ttl": 604800,
+      "refresh_on_read": true
+    }
+  }
+}

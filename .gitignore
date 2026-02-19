@@ -6,3 +6,6 @@ __pycache__/
 
 # dotenv
 .env
+
+# langgraph
+.langgraph_api/
