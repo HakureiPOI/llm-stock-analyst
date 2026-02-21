@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "my_agent": "./agents/stock_agent.py:agent"
+    "my_agent": "./agents/supervisor_entry.py:supervisor"
   },
   "env": ".env",
   "python_version": "3.11",
