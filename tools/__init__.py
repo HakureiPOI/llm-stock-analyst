@@ -10,7 +10,6 @@ from .stock_tools import (
     get_stock_cashflow,
     get_stock_fina_indicator,
     get_adj_factor,
-    get_cache_status,
 )
 
 from .index_tools import (
@@ -42,7 +41,6 @@ __all__ = [
     "get_stock_cashflow",
     "get_stock_fina_indicator",
     "get_adj_factor",
-    "get_cache_status",
     # 指数工具
     "get_index_basic_info",
     "get_index_daily_kline",

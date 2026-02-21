@@ -2,7 +2,7 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 from langchain.tools import tool
-from tsdata import stock_data, get_cache_info
+from tsdata import stock_data
 
 
 class StockBasicQuery(BaseModel):
@@ -169,15 +169,3 @@ def get_adj_factor(ts_code: str, start_date=None, end_date=None, limit=None) -> 
     if df.empty:
         return "未找到该股票的复权因子数据。"
     return df.to_json(orient="records", force_ascii=False, indent=2)
-
-
-@tool
-def get_cache_status() -> str:
-    """查看当前数据缓存状态，包括缓存数量和配置。"""
-    info = get_cache_info()
-    return f"""
-数据缓存状态：
-- 当前缓存数量: {info['size']}
-- 最大缓存数量: {info['maxsize']}
-- 缓存过期时间: {info['ttl']} 秒
-"""
