@@ -37,6 +37,12 @@ from .volatility_tools import (
     get_volatility_forecast_summary,
 )
 
+from .websearch_tools import (
+    web_search,
+    web_search_company,
+    web_search_market,
+)
+
 __all__ = [
     # 股票工具
     "get_stock_basic_info",
@@ -64,4 +70,8 @@ __all__ = [
     "predict_stock_volatility",
     "compare_stock_volatility",
     "get_volatility_forecast_summary",
+    # 联网搜索工具
+    "web_search",
+    "web_search_company",
+    "web_search_market",
 ]
