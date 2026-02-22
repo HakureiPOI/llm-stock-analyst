@@ -31,6 +31,12 @@ from .common_tools import (
     get_stock_market_status,
 )
 
+from .volatility_tools import (
+    predict_stock_volatility,
+    compare_stock_volatility,
+    get_volatility_forecast_summary,
+)
+
 __all__ = [
     # 股票工具
     "get_stock_basic_info",
@@ -54,4 +60,8 @@ __all__ = [
     # 通用工具
     "get_current_time",
     "get_stock_market_status",
+    # 波动率预测工具
+    "predict_stock_volatility",
+    "compare_stock_volatility",
+    "get_volatility_forecast_summary",
 ]

@@ -1,11 +1,16 @@
-# venv 
+# venv
 venv/
 
 # pycache
 __pycache__/
+*.pyc
 
 # dotenv
 .env
 
 # langgraph
 .langgraph_api/
+
+# ml data and models
+ml/dataset/
+ml/models/
