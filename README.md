@@ -256,6 +256,4 @@ response = supervisor.invoke(
 2. 日期格式: YYYYMMDD，如 `20250101`
 3. 投资有风险，所有分析仅供参考，不构成投资建议
 
-## License
 
-MIT
