@@ -165,60 +165,33 @@ python -m ml.train_model
 
 ## 联网搜索工具
 
-系统集成了基于阿里云通义千问的实时联网搜索能力，提供以下三种搜索工具：
+系统集成了基于阿里云通义千问的实时联网搜索能力。
 
 ### web_search (通用联网搜索)
 - **功能**: 实时获取互联网信息，补充结构化数据的不足
 - **适用场景**:
-  - 获取最新的新闻资讯和突发事件
-  - 查询实时市场动态和政策解读
-  - 搜索公司最新公告和财报解读
-  - 获取宏观经济数据和行业研究报告
-  - 补充技术分析之外的实时信息
-- **使用方式**: Supervisor 会根据问题自动调用，用户也可以在提问中明确要求"搜索相关信息"
-
-### web_search_company (公司专属搜索)
-- **功能**: 针对特定公司的定向搜索，自动构造优化查询
-- **参数**:
-  - `ts_code`: 股票代码 (如 600519.SH)
-  - `query_type`: 搜索类型
-    - `news`: 最新新闻 (默认)
-    - `announcement`: 公告信息
-    - `analysis`: 分析报告
-    - `general`: 综合信息
-- **优势**: 自动提取股票代码并构造专业搜索关键词，返回更精准的结果
-
-### web_search_market (大盘搜索)
-- **功能**: 搜索大盘指数的最新市场动态和趋势分析
-- **参数**:
-  - `index_code`: 指数代码，默认上证指数 (000001.SH)
-  - 支持的指数: 上证指数、深证成指、创业板指、沪深300、上证50、中证500
-- **优势**: 针对指数分析优化，自动匹配指数名称并构造搜索查询
+  - 用户明确要求查询"最新新闻"、"最新公告"、"最新政策"
+  - 市场热点事件、宏观政策等无法从结构化数据获取的信息
+  - 用户要求的交叉验证
 
 ### 数据源优先级
-Supervisor 在分析时会遵循以下数据源优先级：
-1. **结构化数据 (tsdata)**: Tushare 提供的历史数据、财务报表、技术指标等，作为分析基础
-2. **联网搜索 (websearch)**: 作为辅助工具，用于获取最新资讯、市场动态和实时信息
-3. **交叉验证**: 将结构化数据与联网搜索结果进行对比，发现数据不一致点并标注
+Supervisor 在分析时严格遵循以下原则：
+1. **结构化数据优先**: 所有能从专家智能体获取的数据，绝不使用联网搜索
+2. **联网搜索为辅**: 仅用于获取新闻、公告、政策等非结构化实时信息
+3. **禁止替代**: 不用联网搜索替代专家智能体获取股票/指数数据
 
 ### 使用示例
 
 ```python
-# 示例1: 分析贵州茅台，Supervisor会自动组合使用数据源和联网搜索
+# 示例: 查询最新新闻（需要联网搜索的场景）
 response = supervisor.invoke(
-    {"messages": [{"role": "user", "content": "分析贵州茅台的最新基本面和近期新闻"}]},
+    {"messages": [{"role": "user", "content": "最近A股市场有什么重要新闻？"}]},
     context=Context(user_id="user_1")
 )
 
-# 示例2: 查询大盘趋势，Supervisor会自动搜索最新市场动态
+# 示例: 分析股票（不需要联网搜索，由专家智能体处理）
 response = supervisor.invoke(
-    {"messages": [{"role": "user", "content": "上证指数最近有什么重要新闻"}]},
-    context=Context(user_id="user_1")
-)
-
-# 示例3: 用户明确要求使用联网搜索
-response = supervisor.invoke(
-    {"messages": [{"role": "user", "content": "搜索宁德时代最近的分析报告"}]},
+    {"messages": [{"role": "user", "content": "分析贵州茅台的基本面和技术指标"}]},
     context=Context(user_id="user_1")
 )
 ```
@@ -238,8 +211,6 @@ response = supervisor.invoke(
 | `compare_index_risk` | 对比多指数风险度 | Risk Specialist |
 | `get_market_risk_summary` | 市场风险摘要 | Risk Specialist |
 | `web_search` | 通用联网搜索 | Supervisor |
-| `web_search_company` | 搜索公司相关信息 | Supervisor |
-| `web_search_market` | 搜索大盘市场动态 | Supervisor |
 
 ## 指数风险度预测
 
