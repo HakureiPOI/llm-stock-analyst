@@ -1,269 +1,289 @@
+"""指数风险度模型训练 - Walk-Forward 验证"""
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 from pathlib import Path
 import pickle
 import json
 from datetime import datetime
 
 
-class VolatilityModel:
-    """波动率预测模型"""
+class IndexRiskModel:
+    """指数风险度预测模型 (支持多预测窗口)"""
 
     def __init__(self, model_path: str = None):
         """
         初始化模型
 
         Args:
-            model_path: 模型保存路径
+            model_path: 模型保存路径 (不含扩展名)
         """
-        self.model = None
-        self.model_path = model_path or "ml/models/volatility_model.pkl"
-        self.metadata_path = str(Path(self.model_path).parent / "model_metadata.json")
+        self.models = {}  # 存储 {horizon: model}
+        self.feature_cols = None
+        self.target_horizons = [5, 20]
+        
+        # 模型保存路径
+        if model_path:
+            self.model_dir = Path(model_path).parent
+        else:
+            self.model_dir = Path("ml/models")
+        
+        self.model_dir.mkdir(parents=True, exist_ok=True)
 
-    def prepare_data(self, df: pd.DataFrame, train_ratio: float = 0.7,
-                   val_ratio: float = 0.15) -> tuple:
+    def prepare_data(self, df: pd.DataFrame, target_horizons: list = [5, 20]) -> tuple:
         """
-        准备训练数据并分割
+        准备训练数据
 
         Args:
             df: 特征工程后的数据
-            train_ratio: 训练集比例
-            val_ratio: 验证集比例
+            target_horizons: 目标预测窗口列表
 
         Returns:
-            (X_train, y_train, X_val, y_val, X_test, y_test)
+            (df_clean, feature_cols, target_cols)
         """
-        print("准备数据...")
-
-        # 目标变量
-        target_column = 'future_volatility'
+        self.target_horizons = target_horizons
+        target_cols = [f'rv_{h}_fut' for h in target_horizons]
 
         # 删除不需要的列
-        columns_to_drop = [
-            'ts_code', 'trade_date', 'log_return', target_column
-        ]
+        drop_cols = ['ts_code', 'trade_date'] + target_cols
+        self.feature_cols = [col for col in df.columns if col not in drop_cols]
 
-        X = df.drop(columns=columns_to_drop)
-        y = df[target_column]
+        # 删除 NaN
+        df_clean = df.dropna(subset=target_cols + self.feature_cols)
 
-        # 按时间排序
-        df_sorted = df.sort_values(by='trade_date')
-        X = X.reindex(df_sorted.index)
-        y = y.reindex(df_sorted.index)
+        print(f"有效样本: {len(df_clean)}")
+        print(f"特征数量: {len(self.feature_cols)}")
+        print(f"预测目标: {[f'{h}日RV' for h in target_horizons]}")
 
-        # 分割数据 (训练/验证/测试 = 70%/15%/15%)
-        total_samples = len(df_sorted)
-        train_size = int(total_samples * train_ratio)
-        val_size = int(total_samples * val_ratio)
+        return df_clean, self.feature_cols, target_cols
 
-        X_train = X.iloc[:train_size]
-        y_train = y.iloc[:train_size]
-
-        X_val = X.iloc[train_size:train_size + val_size]
-        y_val = y.iloc[train_size:train_size + val_size]
-
-        X_test = X.iloc[train_size + val_size:]
-        y_test = y.iloc[train_size + val_size:]
-
-        print(f"总样本: {total_samples}")
-        print(f"训练集: {len(X_train)}")
-        print(f"验证集: {len(X_val)}")
-        print(f"测试集: {len(X_test)}")
-
-        return X_train, y_train, X_val, y_val, X_test, y_test
-
-    def train(self, X_train, y_train, X_val, y_val,
-             random_state: int = 42) -> lgb.LGBMRegressor:
+    def walk_forward_train(self, df: pd.DataFrame,
+                           train_window: int = 756,
+                           test_window: int = 63,
+                           valid_ratio: float = 0.2,
+                           target_horizons: list = [5, 20]) -> dict:
         """
-        训练LightGBM模型
+        Walk-Forward 训练验证 (支持多预测窗口)
 
         Args:
-            X_train: 训练特征
-            y_train: 训练标签
-            X_val: 验证特征
-            y_val: 验证标签
-            random_state: 随机种子
+            df: 特征工程后的数据 (需按时间排序)
+            train_window: 训练窗口大小
+            test_window: 测试窗口大小
+            valid_ratio: 验证集比例
+            target_horizons: 目标预测窗口列表
 
         Returns:
-            训练好的模型
+            dict: 训练结果
         """
-        print("\n训练LightGBM模型...")
+        # 准备数据
+        df = df.sort_values('trade_date').reset_index(drop=True)
+        df_clean, feature_cols, target_cols = self.prepare_data(df, target_horizons)
 
-        # 初始化模型
-        self.model = lgb.LGBMRegressor(
-            random_state=random_state,
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=-1,
-            num_leaves=31,
-            verbose=-1
-        )
+        results = {}
+        
+        for horizon, target_col in zip(target_horizons, target_cols):
+            print(f"\n{'='*60}")
+            print(f"训练 {horizon}日预测模型")
+            print(f"{'='*60}")
+            
+            maes, rmses = [], []
+            all_predictions = []
 
-        # 训练
-        self.model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
+            fold = 0
+            for start in range(train_window, len(df_clean), test_window):
+                fold += 1
 
-        print("训练完成!")
+                # 划分数据
+                train_full = df_clean.iloc[start - train_window:start]
+                test = df_clean.iloc[start:start + test_window]
 
-        # 验证集评估
-        y_pred_val = self.model.predict(X_val)
-        self._print_metrics(y_val, y_pred_val, "验证集")
+                if len(test) == 0:
+                    break
 
-        return self.model
+                # 训练集/验证集划分
+                n_train = len(train_full)
+                n_valid = int(n_train * valid_ratio)
+                train = train_full.iloc[:-n_valid]
+                valid = train_full.iloc[-n_valid:]
 
-    def _print_metrics(self, y_true, y_pred, dataset_name: str):
-        """打印评估指标"""
-        mae = mean_absolute_error(y_true, y_pred)
-        mse = mean_squared_error(y_true, y_pred)
-        rmse = np.sqrt(mse)
-        r2 = r2_score(y_true, y_pred)
+                # 特征和目标
+                X_train = train[feature_cols]
+                y_train = np.log(train[target_col])  # 对数变换
+                X_valid = valid[feature_cols]
+                y_valid = np.log(valid[target_col])
+                X_test = test[feature_cols]
+                y_test = test[target_col]
 
-        print(f"\n{dataset_name}指标:")
-        print(f"  MAE:  {mae:.6f}")
-        print(f"  MSE:  {mse:.6f}")
-        print(f"  RMSE: {rmse:.6f}")
-        print(f"  R²:   {r2:.6f}")
+                # 训练模型
+                model = lgb.LGBMRegressor(
+                    n_estimators=5000,
+                    learning_rate=0.02,
+                    num_leaves=31,
+                    min_child_samples=10,
+                    subsample=0.9,
+                    colsample_bytree=0.9,
+                    reg_lambda=1.0,
+                    random_state=42,
+                    n_jobs=-1,
+                    verbose=-1
+                )
 
-        return {'mae': mae, 'mse': mse, 'rmse': rmse, 'r2': r2}
+                model.fit(
+                    X_train, y_train,
+                    eval_set=[(X_valid, y_valid)],
+                    eval_metric="l2",
+                    callbacks=[lgb.early_stopping(200, verbose=False)]
+                )
 
-    def evaluate(self, X_test, y_test) -> dict:
-        """
-        评估模型
+                # 预测
+                y_pred = np.exp(model.predict(X_test))  # 反变换
 
-        Args:
-            X_test: 测试特征
-            y_test: 测试标签
+                # 计算指标
+                mae = mean_absolute_error(y_test, y_pred)
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                maes.append(mae)
+                rmses.append(rmse)
 
-        Returns:
-            评估指标字典
-        """
-        print("\n评估测试集...")
+                # 保存预测结果
+                pred_df = pd.DataFrame({
+                    'trade_date': test['trade_date'].values,
+                    'y_true': y_test.values,
+                    'y_pred': y_pred
+                })
+                all_predictions.append(pred_df)
 
-        y_pred = self.model.predict(X_test)
-        metrics = self._print_metrics(y_test, y_pred, "测试集")
+                if fold <= 3:  # 只显示前3个fold
+                    print(f"  Fold {fold}: MAE={mae:.6f}, RMSE={rmse:.6f}")
 
-        return metrics
+            # 合并预测结果
+            predictions_df = pd.concat(all_predictions).sort_values('trade_date').reset_index(drop=True)
+
+            # 最终模型: 用全部数据重新训练
+            print(f"\n用全部数据训练 {horizon}日 最终模型...")
+            n_valid = int(len(df_clean) * valid_ratio)
+            train_final = df_clean.iloc[:-n_valid]
+            valid_final = df_clean.iloc[-n_valid:]
+
+            X_train_final = train_final[feature_cols]
+            y_train_final = np.log(train_final[target_col])
+            X_valid_final = valid_final[feature_cols]
+            y_valid_final = np.log(valid_final[target_col])
+
+            final_model = lgb.LGBMRegressor(
+                n_estimators=5000,
+                learning_rate=0.02,
+                num_leaves=31,
+                min_child_samples=10,
+                subsample=0.9,
+                colsample_bytree=0.9,
+                reg_lambda=1.0,
+                random_state=42,
+                n_jobs=-1,
+                verbose=-1
+            )
+
+            final_model.fit(
+                X_train_final, y_train_final,
+                eval_set=[(X_valid_final, y_valid_final)],
+                eval_metric="l2",
+                callbacks=[lgb.early_stopping(200, verbose=False)]
+            )
+
+            # 保存模型
+            self.models[horizon] = final_model
+
+            # 汇总结果
+            results[horizon] = {
+                'avg_mae': float(np.mean(maes)),
+                'avg_rmse': float(np.mean(rmses)),
+                'folds': fold,
+                'predictions': predictions_df
+            }
+
+            print(f"\n{horizon}日模型训练完成!")
+            print(f"平均 MAE:  {results[horizon]['avg_mae']:.6f}")
+            print(f"平均 RMSE: {results[horizon]['avg_rmse']:.6f}")
+
+        return results
 
     def save_model(self, metadata: dict = None):
-        """
-        保存模型和元数据
+        """保存模型和元数据"""
+        import json
 
-        Args:
-            metadata: 元数据字典
-        """
-        # 确保目录存在
-        model_dir = Path(self.model_path).parent
-        model_dir.mkdir(parents=True, exist_ok=True)
-
-        # 保存模型
-        with open(self.model_path, 'wb') as f:
-            pickle.dump(self.model, f)
-        print(f"\n模型已保存: {self.model_path}")
-
-        # 构建元数据
-        if metadata is None:
-            metadata = {}
-
-        default_metadata = {
-            'model_type': 'LightGBM',
-            'task': 'volatility_prediction',
-            'target': 'future_volatility (5-day log return std)',
-            'training_date': datetime.now().isoformat(),
-            'saved_at': datetime.now().isoformat(),
-            'model_path': str(self.model_path)
-        }
-
-        # 合并元数据
-        final_metadata = {**default_metadata, **metadata}
+        # 保存每个模型
+        for horizon, model in self.models.items():
+            model_path = self.model_dir / f"index_risk_model_{horizon}d.pkl"
+            with open(model_path, 'wb') as f:
+                pickle.dump({
+                    'model': model,
+                    'feature_cols': self.feature_cols,
+                    'horizon': horizon
+                }, f)
+            print(f"{horizon}日模型已保存: {model_path}")
 
         # 保存元数据
-        with open(self.metadata_path, 'w', encoding='utf-8') as f:
-            json.dump(final_metadata, f, indent=2, ensure_ascii=False)
-        print(f"元数据已保存: {self.metadata_path}")
+        metadata_path = self.model_dir / "model_metadata.json"
+        default_metadata = {
+            'model_type': 'LightGBM',
+            'task': 'index_risk_prediction',
+            'target_horizons': list(self.models.keys()),
+            'training_date': datetime.now().isoformat(),
+        }
 
-        return final_metadata
+        if metadata:
+            default_metadata.update(metadata)
 
-    def load_model(self):
-        """加载模型和元数据"""
-        with open(self.model_path, 'rb') as f:
-            self.model = pickle.load(f)
-        print(f"模型已加载: {self.model_path}")
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(default_metadata, f, indent=2, ensure_ascii=False)
+        print(f"元数据已保存: {metadata_path}")
 
-        with open(self.metadata_path, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-        print(f"元数据已加载")
-
-        return metadata
-
-    def predict(self, X) -> np.ndarray:
-        """
-        预测
-
-        Args:
-            X: 特征数据
-
-        Returns:
-            预测结果
-        """
-        if self.model is None:
-            raise ValueError("模型未训练或加载")
-        return self.model.predict(X)
-
-    def run_pipeline(self, input_file: str, model_save_path: str = None):
+    def run_pipeline(self, input_file: str, model_save_path: str = None,
+                     target_horizons: list = [5, 20]) -> dict:
         """
         完整训练流程
 
         Args:
             input_file: 特征数据文件
             model_save_path: 模型保存路径
+            target_horizons: 目标预测窗口列表
 
         Returns:
-            (模型, 元数据, 测试集指标)
+            dict: 训练结果
         """
-        # 加载数据
         print(f"加载数据: {input_file}")
         df = pd.read_csv(input_file)
 
-        # 设置模型保存路径
         if model_save_path:
-            self.model_path = model_save_path
-            self.metadata_path = str(Path(model_save_path).parent / "model_metadata.json")
+            self.model_dir = Path(model_save_path).parent
 
-        # 准备数据
-        X_train, y_train, X_val, y_val, X_test, y_test = self.prepare_data(df)
+        # 训练
+        results = self.walk_forward_train(df, target_horizons=target_horizons)
 
-        # 训练模型
-        model = self.train(X_train, y_train, X_val, y_val)
-
-        # 评估模型
-        test_metrics = self.evaluate(X_test, y_test)
-
-        # 保存模型和元数据
+        # 保存
         metadata = {
             'input_file': input_file,
             'total_samples': len(df),
-            'train_samples': len(X_train),
-            'val_samples': len(X_val),
-            'test_samples': len(X_test),
-            'feature_count': X_train.shape[1],
-            'test_metrics': test_metrics
+            'feature_count': len(self.feature_cols),
         }
+        self.save_model(metadata)
 
-        final_metadata = self.save_model(metadata)
-
-        return model, final_metadata, test_metrics
+        return results
 
 
 if __name__ == "__main__":
-    trainer = VolatilityModel()
+    ml_dir = Path(__file__).parent
+    trainer = IndexRiskModel()
 
-    # 训练并保存模型
-    model, metadata, metrics = trainer.run_pipeline(
-        input_file="/home/hakurei/llm-stock-analyst/ml/dataset/kline_dataset_features.csv",
-        model_save_path="/home/hakurei/llm-stock-analyst/ml/models/volatility_model.pkl"
+    results = trainer.run_pipeline(
+        input_file=str(ml_dir / "dataset" / "index_features.csv"),
+        model_save_path=str(ml_dir / "models" / "index_risk_model.pkl"),
+        target_horizons=[5, 20]  # 一周和一月
     )
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("训练完成!")
-    print("="*50)
+    print("=" * 50)
+    
+    for horizon, res in results.items():
+        print(f"\n{horizon}日模型: MAE={res['avg_mae']:.6f}, RMSE={res['avg_rmse']:.6f}")

@@ -45,7 +45,7 @@ def get_chat_model(
 
 # 默认模型配置
 DEFAULT_MODEL_CONFIG = {
-    "model": "qwen3.5-plus-2026-02-15",
+    "model": "qwen-max",
     "model_provider": "openai",
     "temperature": 0.7,
 }

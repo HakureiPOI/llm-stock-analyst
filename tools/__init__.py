@@ -32,9 +32,9 @@ from .common_tools import (
 )
 
 from .volatility_tools import (
-    predict_stock_volatility,
-    compare_stock_volatility,
-    get_volatility_forecast_summary,
+    predict_index_risk,
+    compare_index_risk,
+    get_market_risk_summary,
 )
 
 from .websearch_tools import (
@@ -66,10 +66,10 @@ __all__ = [
     # 通用工具
     "get_current_time",
     "get_stock_market_status",
-    # 波动率预测工具
-    "predict_stock_volatility",
-    "compare_stock_volatility",
-    "get_volatility_forecast_summary",
+    # 指数风险度预测工具
+    "predict_index_risk",
+    "compare_index_risk",
+    "get_market_risk_summary",
     # 联网搜索工具
     "web_search",
     "web_search_company",

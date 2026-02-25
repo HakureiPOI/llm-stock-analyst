@@ -1,170 +1,243 @@
+"""指数风险度特征工程 - 基于已实现波动率预测"""
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
 
-class FeatureEngineering:
-    """特征工程类 - 参考volatility.py方案"""
+class IndexRiskFeatureEngineering:
+    """指数风险度特征工程类"""
 
-    def calculate_future_volatility(self, df: pd.DataFrame, window_size: int = 5) -> pd.DataFrame:
+    def calculate_returns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        计算未来波动率: 未来N日对数收益率的标准差
+        计算收益率相关特征
 
         Args:
-            df: 输入数据
-            window_size: 波动率窗口天数,默认5天
+            df: 指数日线数据 (需包含 close, pre_close, high, low)
 
         Returns:
-            DataFrame: 添加了log_return和future_volatility的数据
-        """
-        df = df.sort_values(by=['ts_code', 'trade_date']).copy()
-
-        # 计算日对数收益率
-        df['log_return'] = df.groupby('ts_code')['close'].transform(
-            lambda x: np.log(x / x.shift(1))
-        )
-
-        # 计算未来波动率: 未来window_size天对数收益率的标准差
-        df['future_volatility'] = df.groupby('ts_code')['log_return'].transform(
-            lambda x: x.shift(-1).rolling(window=window_size).std()
-        )
-
-        return df
-
-    def add_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        添加特征: 滞后特征、移动平均、技术指标、日期特征
-
-        Args:
-            df: 已计算log_return和future_volatility的数据
-
-        Returns:
-            DataFrame: 添加了所有特征的数据
+            DataFrame: 添加了收益率特征的数据
         """
         df = df.copy()
 
-        # 1. 滞后特征: close, vol, log_return
-        print("生成滞后期特征...")
-        for col in ['close', 'vol', 'log_return']:
-            for lag in [1, 3, 5]:
-                df[f'{col}_lag{lag}'] = df.groupby('ts_code')[col].shift(lag)
+        # 对数收益率
+        df['log_ret'] = np.log(df['close'] / df['pre_close'])
 
-        # 2. 移动平均: close价格
-        print("生成移动平均特征...")
-        for window in [5, 10, 20]:
-            df[f'MA_close_{window}'] = df.groupby('ts_code')['close'].transform(
-                lambda x: x.rolling(window=window).mean()
-            )
+        # 收益率平方 (用于波动率计算)
+        df['r2'] = df['log_ret'] ** 2
 
-        # 3. RSI指标 (14日)
-        print("生成RSI指标...")
-        def calculate_rsi(series, window=14):
-            diff = series.diff(1)
-            gain = diff.mask(diff < 0, 0)
-            loss = diff.mask(diff > 0, 0).abs()
-            avg_gain = gain.ewm(com=window - 1, adjust=False).mean()
-            avg_loss = loss.ewm(com=window - 1, adjust=False).mean()
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-            return rsi
-
-        df['RSI_14'] = df.groupby('ts_code')['close'].transform(
-            lambda x: calculate_rsi(x, window=14)
-        )
-
-        # 4. MACD指标
-        print("生成MACD指标...")
-        # 计算EMA
-        df['EMA_fast'] = df.groupby('ts_code')['close'].transform(
-            lambda x: x.ewm(span=12, adjust=False).mean()
-        )
-        df['EMA_slow'] = df.groupby('ts_code')['close'].transform(
-            lambda x: x.ewm(span=26, adjust=False).mean()
-        )
-
-        # MACD线
-        df['MACD'] = df['EMA_fast'] - df['EMA_slow']
-
-        # 信号线
-        df['Signal_Line'] = df.groupby('ts_code')['MACD'].transform(
-            lambda x: x.ewm(span=9, adjust=False).mean()
-        )
-
-        # 柱状图
-        df['MACD_Histogram'] = df['MACD'] - df['Signal_Line']
-
-        # 删除中间列
-        df = df.drop(columns=['EMA_fast', 'EMA_slow'])
-
-        # 5. 日期特征
-        print("生成日期特征...")
-        df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-        df['day_of_week'] = df['trade_date'].dt.dayofweek
-        df['month'] = df['trade_date'].dt.month
+        # 绝对收益率
+        df['abs_ret'] = np.abs(df['log_ret'])
 
         return df
 
-    def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
+    def calculate_future_rv(self, df: pd.DataFrame, horizons: list = [5, 20]) -> pd.DataFrame:
         """
-        清理数据: 删除含NaN的行
+        计算未来已实现波动率 (目标变量)
 
         Args:
-            df: 特征工程后的数据
+            df: 包含 r2 列的数据
+            horizons: 预测窗口列表
 
         Returns:
-            DataFrame: 清理后的数据
+            DataFrame: 添加了目标变量的数据
         """
-        original_len = len(df)
-        df = df.dropna()
-        print(f"清理数据: {original_len} -> {len(df)} 条记录")
+        df = df.copy()
+
+        def future_rv(r2, h):
+            """未来 h 日已实现波动率"""
+            return np.sqrt(r2.shift(-1).rolling(h).sum()).shift(-(h-1))
+
+        for h in horizons:
+            df[f'rv_{h}_fut'] = future_rv(df['r2'], h)
+
         return df
 
-    def create_features(self, input_file: str, output_file: str = None,
-                     window_size: int = 5) -> pd.DataFrame:
+    def calculate_past_rv(self, df: pd.DataFrame, windows: list = [5, 10, 20, 60]) -> pd.DataFrame:
+        """
+        计算过去已实现波动率 (特征)
+
+        Args:
+            df: 包含 r2 列的数据
+            windows: 计算窗口列表
+
+        Returns:
+            DataFrame: 添加了过去波动率特征的数据
+        """
+        df = df.copy()
+
+        for w in windows:
+            df[f'rv_past_{w}'] = np.sqrt(df['r2'].rolling(w).sum())
+
+        return df
+
+    def calculate_parkinson_var(self, df: pd.DataFrame, windows: list = [5, 20]) -> pd.DataFrame:
+        """
+        计算 Parkinson 方差代理 (基于高低价)
+
+        Args:
+            df: 包含 high, low 列的数据
+            windows: 计算窗口列表
+
+        Returns:
+            DataFrame: 添加了 Parkinson 方差特征的数据
+        """
+        df = df.copy()
+
+        # Parkinson 方差代理
+        df['log_hl'] = np.log(df['high'] / df['low'])
+        df['pk_var'] = (df['log_hl'] ** 2) / (4 * np.log(2))
+
+        # 累积 Parkinson 波动率
+        for w in windows:
+            df[f'pk_rv_past_{w}'] = np.sqrt(df['pk_var'].rolling(w).sum())
+
+        return df
+
+    def calculate_volume_features(self, df: pd.DataFrame, windows: list = [5, 20]) -> pd.DataFrame:
+        """
+        计算成交量相关特征
+
+        Args:
+            df: 包含 vol, amount 列的数据
+            windows: 计算窗口列表
+
+        Returns:
+            DataFrame: 添加了成交量特征的数据
+        """
+        df = df.copy()
+
+        # 对数成交量和成交额
+        df['log_vol'] = np.log(df['vol'].replace(0, np.nan))
+        df['log_amt'] = np.log(df['amount'].replace(0, np.nan))
+
+        # 移动平均
+        for w in windows:
+            df[f'log_vol_ma_{w}'] = df['log_vol'].rolling(w).mean()
+            df[f'log_amt_ma_{w}'] = df['log_amt'].rolling(w).mean()
+
+        return df
+
+    def calculate_rv_ratios(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        计算波动率比率特征
+
+        Args:
+            df: 包含 rv_past_* 列的数据
+
+        Returns:
+            DataFrame: 添加了波动率比率特征的数据
+        """
+        df = df.copy()
+
+        # 波动率比率
+        df['rv_ratio_5_20'] = df['rv_past_5'] / df['rv_past_20']
+        df['rv_ratio_20_60'] = df['rv_past_20'] / df['rv_past_60']
+
+        # 波动率变化率
+        df['rv5_chg'] = df['rv_past_5'].pct_change()
+        df['rv20_chg'] = df['rv_past_20'].pct_change()
+
+        return df
+
+    def create_features(self, df: pd.DataFrame, target_horizons: list = [5, 20]) -> pd.DataFrame:
         """
         完整特征工程流程
 
         Args:
-            input_file: 输入数据文件路径
-            output_file: 输出文件路径
-            window_size: 波动率计算窗口,默认5天
+            df: 原始指数日线数据
+            target_horizons: 目标预测窗口列表，默认 [5, 20] (一周和一月)
 
         Returns:
-            DataFrame: 包含特征和目标的完整数据集
+            DataFrame: 包含所有特征的数据
         """
-        print(f"读取数据: {input_file}")
-        df = pd.read_csv(input_file)
-        print(f"原始数据: {len(df)} 条记录, {df['ts_code'].nunique()} 只股票")
+        print("开始特征工程...")
 
-        # 1. 计算未来波动率 (目标变量)
-        print(f"\n步骤1: 计算未来{window_size}日波动率...")
-        df = self.calculate_future_volatility(df, window_size)
+        # 1. 按日期排序
+        df = df.sort_values('trade_date').reset_index(drop=True)
 
-        # 2. 添加特征
-        print("\n步骤2: 生成特征...")
-        df = self.add_features(df)
+        # 2. 计算收益率
+        print("  - 计算收益率...")
+        df = self.calculate_returns(df)
 
-        # 3. 清理数据
-        print("\n步骤3: 清理数据...")
-        df = self.clean_data(df)
+        # 3. 计算未来波动率 (目标变量)
+        print(f"  - 计算目标变量: {[f'{h}日' for h in target_horizons]}...")
+        df = self.calculate_future_rv(df, horizons=target_horizons)
 
-        # 4. 保存
-        if output_file is None:
-            input_path = Path(input_file)
-            output_file = input_path.parent / f"{input_path.stem}_features.csv"
+        # 4. 计算过去波动率
+        print("  - 计算过去波动率...")
+        df = self.calculate_past_rv(df)
 
-        df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        print(f"\n已保存到: {output_file}")
-        print(f"\n最终数据: {len(df)} 条记录, {df['ts_code'].nunique()} 只股票")
-        print(f"特征列数: {len(df.columns)}")
+        # 5. 计算 Parkinson 方差
+        print("  - 计算 Parkinson 方差...")
+        df = self.calculate_parkinson_var(df)
+
+        # 6. 计算成交量特征
+        print("  - 计算成交量特征...")
+        df = self.calculate_volume_features(df)
+
+        # 7. 计算波动率比率
+        print("  - 计算波动率比率...")
+        df = self.calculate_rv_ratios(df)
+
+        # 8. 删除中间列
+        df = df.drop(columns=['log_hl', 'pk_var'], errors='ignore')
+
+        print(f"特征工程完成: {len(df)} 条记录, {len(df.columns)} 个特征")
 
         return df
 
+    def get_feature_columns(self, df: pd.DataFrame, target_horizons: list = [5, 20]) -> list:
+        """
+        获取特征列名
+
+        Args:
+            df: 特征工程后的数据
+            target_horizons: 目标预测窗口列表
+
+        Returns:
+            list: 特征列名列表
+        """
+        drop_cols = ['ts_code', 'trade_date'] + [f'rv_{h}_fut' for h in target_horizons]
+        return [col for col in df.columns if col not in drop_cols]
+
+
+def create_index_features(input_file: str, output_file: str = None,
+                          target_horizons: list = [5, 20]) -> pd.DataFrame:
+    """
+    从数据文件创建特征
+
+    Args:
+        input_file: 输入数据文件路径
+        output_file: 输出文件路径
+        target_horizons: 目标预测窗口列表，默认 [5, 20]
+
+    Returns:
+        DataFrame: 包含特征的数据
+    """
+    fe = IndexRiskFeatureEngineering()
+
+    print(f"读取数据: {input_file}")
+    df = pd.read_csv(input_file)
+    print(f"原始数据: {len(df)} 条记录")
+
+    # 特征工程
+    df = fe.create_features(df, target_horizons)
+
+    # 保存
+    if output_file is None:
+        input_path = Path(input_file)
+        output_file = input_path.parent / f"{input_path.stem}_features.csv"
+
+    df.to_csv(output_file, index=False, encoding='utf-8-sig')
+    print(f"已保存到: {output_file}")
+
+    return df
+
 
 if __name__ == "__main__":
-    fe = FeatureEngineering()
-    dataset = fe.create_features(
-        input_file="/home/hakurei/llm-stock-analyst/ml/dataset/kline_dataset_000016_SH_5years.csv",
-        output_file="/home/hakurei/llm-stock-analyst/ml/dataset/kline_dataset_features.csv",
-        window_size=5
+    ml_dir = Path(__file__).parent
+    df = create_index_features(
+        input_file=str(ml_dir / "dataset" / "index_daily_000001_SH_5years.csv"),
+        output_file=str(ml_dir / "dataset" / "index_features.csv"),
+        target_horizons=[5, 20]  # 一周和一月
     )

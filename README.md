@@ -1,13 +1,13 @@
 # LLM Stock Analyst
 
-基于 LangGraph 的多智能体股票分析系统，集成了股票基本面分析、技术指标分析和波动率预测功能。
+基于 LangGraph 的多智能体股票分析系统，集成了股票基本面分析、技术指标分析和指数风险度预测功能。
 
 ## 功能特性
 
-- **多智能体架构**: Supervisor 协调股票专家、指数专家和波动率专家
+- **多智能体架构**: Supervisor 协调股票专家、指数专家和风险度专家
 - **股票分析**: 个股基本面、财务报表、技术指标分析
 - **指数分析**: 大盘趋势、成分股权重、指数技术分析
-- **波动率预测**: 基于 LightGBM 的波动率预测模型
+- **指数风险度预测**: 基于 LightGBM 的已实现波动率预测，同时预测一周和一月风险度，提供历史分位数语义解读
 - **联网搜索**: 集成阿里云百炼实时互联网搜索
 
 ## 项目结构
@@ -35,12 +35,11 @@ llm-stock-analyst/
 │   ├── client.py         # Tushare 客户端
 │   ├── indicators.py     # 技术指标计算
 │   └── cache.py          # 数据缓存
-├── ml/                   # 波动率预测模块
+├── ml/                   # 指数风险度预测模块
 │   ├── feature_engineering.py  # 特征工程
-│   ├── train_model.py    # 模型训练
-│   ├── predict.py        # 模型预测
-│   ├── get_stock_pool.py  # 股票池获取
-│   └── get_stock_kline_dataset.py  # K线数据获取
+│   ├── get_index_data.py # 指数数据获取
+│   ├── train_model.py    # 模型训练 (Walk-Forward)
+│   └── predict.py        # 模型预测
 └── config/               # 配置模块
     └── models.py         # 模型配置
 ```
@@ -104,35 +103,39 @@ response = supervisor.invoke(
 print(response['messages'][-1].content)
 ```
 
-### 预测股票波动率
+### 预测指数风险度
 
 ```python
-from ml.predict import VolatilityPredictor
+from ml.predict import IndexRiskPredictor
 
 # 创建预测器
-predictor = VolatilityPredictor()
+predictor = IndexRiskPredictor()
 
-# 预测单只股票
+# 预测上证指数风险度 (同时预测5日和20日)
 result = predictor.predict(
-    ts_code="600519.SH",
-    days=365,
-    window_size=5
+    ts_code="000001.SH",
+    days=500,
+    horizons=[5, 20]
 )
 
-print(f"R²: {result['metrics']['r2']:.4f}")
+# 获取预测结果
+for horizon in [5, 20]:
+    rv = result['latest_predictions'][horizon]
+    percentile = result['percentiles'][horizon]
+    print(f"{horizon}日预测: {rv:.6f} (历史分位: {percentile['percentile']}% - {percentile['label']})")
 ```
 
-### 训练波动率模型
+### 训练风险度预测模型
 
 ```bash
-# 1. 获取股票池
-python ml/get_stock_pool.py
+# 1. 获取指数数据 (默认上证指数5年)
+python -m ml.get_index_data
 
-# 2. 获取K线数据
-python ml/get_stock_kline_dataset.py
+# 2. 特征工程 (生成预测特征)
+python -m ml.feature_engineering
 
-# 3. 训练模型
-python ml/train_model.py
+# 3. 训练模型 (Walk-Forward 验证)
+python -m ml.train_model
 ```
 
 ## 智能体说明
@@ -153,11 +156,12 @@ python ml/train_model.py
 - 大盘技术分析
 - 板块轮动分析
 
-### Volatility Specialist (波动率专家)
-- 未来波动率预测
-- 波动率模型表现分析
-- 多股票波动率对比
-- 波动率趋势分析
+### Risk Specialist (风险度专家)
+- 指数已实现波动率(RV)预测 (5日/20日双窗口)
+- 历史分位数语义解读
+- 市场风险等级评估
+- 多指数风险对比
+- 整体市场风险摘要
 
 ## 联网搜索工具
 
@@ -230,11 +234,62 @@ response = supervisor.invoke(
 | `analyze_stock_technical` | 技术指标分析 | Stock Specialist |
 | `get_index_basic_info` | 查询指数基础信息 | Index Specialist |
 | `get_index_weight` | 获取指数成分股权重 | Index Specialist |
-| `predict_stock_volatility` | 预测股票波动率 | Volatility Specialist |
-| `compare_stock_volatility` | 对比多只股票波动率 | Volatility Specialist |
+| `predict_index_risk` | 预测指数风险度 | Risk Specialist |
+| `compare_index_risk` | 对比多指数风险度 | Risk Specialist |
+| `get_market_risk_summary` | 市场风险摘要 | Risk Specialist |
 | `web_search` | 通用联网搜索 | Supervisor |
 | `web_search_company` | 搜索公司相关信息 | Supervisor |
 | `web_search_market` | 搜索大盘市场动态 | Supervisor |
+
+## 指数风险度预测
+
+### 预测目标
+- **5日 (一周)**: 未来5个交易日已实现波动率
+- **20日 (一月)**: 未来20个交易日已实现波动率
+
+### 已实现波动率定义
+```
+RV = sqrt(Σ 未来N日对数收益率²)
+```
+反映指数未来N天的波动程度，用于评估市场风险。
+
+### 特征工程
+| 特征类型 | 特征名称 | 说明 |
+|---------|---------|------|
+| 收益率特征 | log_ret, r2, abs_ret | 对数收益率及其变换 |
+| 过去波动率 | rv_past_5/10/20/60 | 过去N日已实现波动率 |
+| Parkinson方差 | pk_rv_past_5/20 | 基于高低价的波动率代理 |
+| 成交量特征 | log_vol, log_amt | 对数成交量/成交额 |
+| 波动率比率 | rv_ratio_5_20, rv_ratio_20_60 | 不同周期波动率比值 |
+| 波动率变化 | rv5_chg, rv20_chg | 波动率变化率 |
+
+### 历史分位数语义
+预测结果会显示在历史数据中的分位数，帮助用户直观理解风险水平：
+
+| 分位数范围 | 标签 | 语义解读 |
+|-----------|------|---------|
+| < 25% | 极低 | 市场波动率处于历史低位，风险较小 |
+| 25% - 50% | 偏低 | 市场波动率低于历史中位数，风险较低 |
+| 50% - 75% | 中等 | 市场波动率处于历史中等水平 |
+| 75% - 90% | 偏高 | 市场波动率高于历史中位数，需关注风险 |
+| > 90% | 极高 | 市场波动率处于历史高位，风险较大 |
+
+### 预测示例输出
+```
+【5日 (一周)】
+  已实现波动率: 0.017307
+  历史分位数: 69.8% (中等)
+  语义解读: 市场波动率处于历史中等水平
+  历史范围: [0.002442, 0.079914]
+  历史中位数: 0.014041
+
+【20日 (一月)】
+  已实现波动率: 0.038516
+  历史分位数: 85.0% (偏高)
+  语义解读: 市场波动率高于历史中位数，需关注风险
+  历史范围: [0.017498, 0.083676]
+  历史中位数: 0.032587
+```
 
 ## 数据源
 
@@ -246,7 +301,7 @@ response = supervisor.invoke(
 - **LangGraph**: 多智能体编排框架
 - **LangChain**: LLM 应用开发框架
 - **DashScope**: 阿里云通义千问大模型 + 联网搜索
-- **LightGBM**: 波动率预测模型
+- **LightGBM**: 指数风险度预测模型 (Walk-Forward 验证)
 - **Pandas/NumPy**: 数据处理
 - **Tushare**: A股数据接口
 
