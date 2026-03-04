@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.linear_model import Ridge
 from pathlib import Path
 import pickle
 import json
@@ -30,6 +31,25 @@ class IndexRiskModel:
             self.model_dir = Path("ml/models")
         
         self.model_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _fit_blend_weight(
+        y_true: np.ndarray,
+        y_pred_lgb: np.ndarray,
+        y_pred_ridge: np.ndarray
+    ) -> float:
+        """在验证集上搜索最优融合权重（针对原始波动率空间 MAE）。"""
+        best_weight = 1.0
+        best_mae = float("inf")
+
+        for w in np.linspace(0.0, 1.0, 21):
+            y_blend = w * y_pred_lgb + (1.0 - w) * y_pred_ridge
+            mae = mean_absolute_error(y_true, y_blend)
+            if mae < best_mae:
+                best_mae = mae
+                best_weight = float(w)
+
+        return best_weight
 
     def prepare_data(self, df: pd.DataFrame, target_horizons: list = [5, 20]) -> tuple:
         """
@@ -136,8 +156,23 @@ class IndexRiskModel:
                     callbacks=[lgb.early_stopping(200, verbose=False)]
                 )
 
+                # 线性基线模型（对高维特征更稳健）
+                ridge_model = Ridge(alpha=1.0)
+                ridge_model.fit(X_train, y_train)
+
+                # 用验证集拟合融合权重
+                y_valid_lgb = np.exp(model.predict(X_valid))
+                y_valid_ridge = np.exp(ridge_model.predict(X_valid))
+                best_weight = self._fit_blend_weight(
+                    y_true=np.exp(y_valid.values),
+                    y_pred_lgb=y_valid_lgb,
+                    y_pred_ridge=y_valid_ridge,
+                )
+
                 # 预测
-                y_pred = np.exp(model.predict(X_test))  # 反变换
+                y_pred_lgb = np.exp(model.predict(X_test))
+                y_pred_ridge = np.exp(ridge_model.predict(X_test))
+                y_pred = best_weight * y_pred_lgb + (1.0 - best_weight) * y_pred_ridge
 
                 # 计算指标
                 mae = mean_absolute_error(y_test, y_pred)
@@ -190,8 +225,23 @@ class IndexRiskModel:
                 callbacks=[lgb.early_stopping(200, verbose=False)]
             )
 
+            final_ridge_model = Ridge(alpha=1.0)
+            final_ridge_model.fit(X_train_final, y_train_final)
+
+            y_valid_final_lgb = np.exp(final_model.predict(X_valid_final))
+            y_valid_final_ridge = np.exp(final_ridge_model.predict(X_valid_final))
+            best_weight_final = self._fit_blend_weight(
+                y_true=np.exp(y_valid_final.values),
+                y_pred_lgb=y_valid_final_lgb,
+                y_pred_ridge=y_valid_final_ridge,
+            )
+
             # 保存模型
-            self.models[horizon] = final_model
+            self.models[horizon] = {
+                'lgb_model': final_model,
+                'ridge_model': final_ridge_model,
+                'blend_weight_lgb': best_weight_final,
+            }
 
             # 汇总结果
             results[horizon] = {
@@ -225,7 +275,7 @@ class IndexRiskModel:
         # 保存元数据
         metadata_path = self.model_dir / "model_metadata.json"
         default_metadata = {
-            'model_type': 'LightGBM',
+            'model_type': 'LightGBM + Ridge Blend',
             'task': 'index_risk_prediction',
             'target_horizons': list(self.models.keys()),
             'training_date': datetime.now().isoformat(),
