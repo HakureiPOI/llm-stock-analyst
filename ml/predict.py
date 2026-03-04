@@ -1,61 +1,52 @@
-"""指数风险度预测"""
+"""
+波动率预测模块 V2
+预测目标：下一交易日的 Yang-Zhang 波动率
+"""
 import pandas as pd
 import numpy as np
 import pickle
 from pathlib import Path
 from datetime import datetime, timedelta
-from .feature_engineering import IndexRiskFeatureEngineering
+from typing import Dict, List, Optional
+
+from .feature_engineering import VolatilityFeatureEngineering
+from .baseline_models import ModelMetrics
 
 
-class IndexRiskPredictor:
-    """指数风险度预测器 (支持多预测窗口)"""
+class VolatilityPredictor:
+    """波动率预测器"""
 
-    def __init__(self, model_dir: str = "ml/models"):
-        """
-        初始化预测器
+    def __init__(self, model_dir: str = None):
+        if model_dir:
+            self.model_dir = Path(model_dir)
+        else:
+            self.model_dir = Path(__file__).parent / "models"
 
-        Args:
-            model_dir: 模型目录路径
-        """
-        self.model_dir = Path(model_dir)
-        self.models = {}  # {horizon: model}
+        self.model = None
         self.feature_cols = None
-        self.fe = IndexRiskFeatureEngineering()
-        self._load_models()
+        self.feature_importance = None
+        self.fe = VolatilityFeatureEngineering()
 
-    def _load_models(self):
+        self._load_model()
+
+    def _load_model(self):
         """加载训练好的模型"""
-        # 查找所有模型文件
-        model_files = list(self.model_dir.glob("index_risk_model_*d.pkl"))
-        
-        if not model_files:
-            raise FileNotFoundError(f"未找到模型文件: {self.model_dir}")
-        
-        for model_file in model_files:
-            # 从文件名提取 horizon
-            horizon = int(model_file.stem.split('_')[-1].replace('d', ''))
-            
-            with open(model_file, 'rb') as f:
-                data = pickle.load(f)
-            
-            self.models[horizon] = data['model']
-            
-            if self.feature_cols is None:
-                self.feature_cols = data['feature_cols']
-        
-        print(f"模型加载成功: {list(self.models.keys())} 日预测模型")
+        model_path = self.model_dir / "volatility_model_lgb.pkl"
 
-    def _get_index_data(self, ts_code: str, days: int = 500):
-        """
-        获取指数日线数据
+        if not model_path.exists():
+            raise FileNotFoundError(f"模型文件不存在: {model_path}")
 
-        Args:
-            ts_code: 指数代码
-            days: 获取天数
+        with open(model_path, 'rb') as f:
+            data = pickle.load(f)
 
-        Returns:
-            DataFrame: 原始数据
-        """
+        self.model = data['model']
+        self.feature_cols = data['feature_cols']
+        self.feature_importance = data.get('feature_importance')
+
+        print(f"模型加载成功: {len(self.feature_cols)} 个特征")
+
+    def _get_index_data(self, ts_code: str, days: int = 300) -> pd.DataFrame:
+        """获取指数日线数据"""
         from tsdata.index import index_data
 
         end_date = datetime.now()
@@ -78,29 +69,22 @@ class IndexRiskPredictor:
         print(f"获取到 {len(df)} 条记录")
         return df
 
-    def predict(self, ts_code: str, days: int = 500, horizons: list = None):
+    def predict(self, ts_code: str, days: int = 300,
+                include_garch: bool = True) -> dict:
         """
-        预测指数未来风险度 (已实现波动率)
+        预测下一交易日波动率
 
         Args:
             ts_code: 指数代码
             days: 获取历史数据天数
-            horizons: 预测窗口列表，默认使用所有已加载模型
+            include_garch: 是否使用GARCH特征
 
         Returns:
-            dict: 预测结果
+            预测结果字典
         """
-        if horizons is None:
-            horizons = sorted(self.models.keys())
-        
-        # 验证 horizons
-        for h in horizons:
-            if h not in self.models:
-                raise ValueError(f"未加载 {h}日预测模型")
-
         print(f"\n{'=' * 60}")
         print(f"开始预测: {ts_code}")
-        print(f"预测窗口: {[f'{h}日' for h in horizons]}")
+        print(f"预测目标: 下一交易日 Yang-Zhang 波动率")
         print(f"{'=' * 60}")
 
         # 1. 获取数据
@@ -108,105 +92,70 @@ class IndexRiskPredictor:
 
         # 2. 特征工程
         print("\n特征工程...")
-        df_feat = self.fe.create_features(df, target_horizons=horizons)
+        df_feat = self.fe.create_features(df, include_garch_features=False)
 
-        # 3. 准备预测数据
-        df_valid = df_feat.dropna(subset=self.feature_cols)
+        # 3. 添加GARCH特征 (如果需要)
+        if include_garch:
+            try:
+                from .garch_features import add_garch_features_to_df
+                print("添加GARCH特征...")
+                df_feat = add_garch_features_to_df(df_feat, min_train_size=100)
+            except Exception as e:
+                print(f"GARCH特征添加失败: {e}")
+
+        # 4. 准备预测数据
+        # 获取最新的有效数据行
+        available_features = [col for col in self.feature_cols if col in df_feat.columns]
+        df_valid = df_feat.dropna(subset=available_features)
 
         if len(df_valid) == 0:
             raise ValueError("没有有效的预测数据")
 
-        X = df_valid[self.feature_cols]
-        print(f"有效预测样本: {len(X)}")
+        # 使用最后一行进行预测
+        X = df_valid[available_features].iloc[[-1]]
+        pred_log = self.model.predict(X)[0]
+        pred_vol = np.exp(pred_log)  # 反对数变换
 
-        # 4. 预测每个时间窗口
-        predictions_by_horizon = {}
-        for horizon in horizons:
-            model = self.models[horizon]
-            pred = np.exp(model.predict(X))  # 反对数变换
-            predictions_by_horizon[horizon] = pred
+        # 5. 计算历史统计和分位数
+        historical_vol = df_feat['yang_zhang_vol'].dropna().values
 
-        # 5. 计算模型表现
-        metrics_by_horizon = {}
-        actual_vs_pred = {}
-        
-        for horizon in horizons:
-            target_col = f'rv_{horizon}_fut'
-            df_with_target = df_valid.dropna(subset=[target_col])
+        percentile = (np.sum(historical_vol < pred_vol) / len(historical_vol)) * 100 if len(historical_vol) > 0 else 50
 
-            if len(df_with_target) > 0:
-                common_index = df_with_target.index.intersection(X.index)
-                y_true = df_with_target.loc[common_index, target_col].values
-                y_pred = predictions_by_horizon[horizon][X.index.get_indexer(common_index)]
+        historical_stats = {
+            'mean': float(np.mean(historical_vol)) if len(historical_vol) > 0 else 0,
+            'std': float(np.std(historical_vol)) if len(historical_vol) > 0 else 0,
+            'min': float(np.min(historical_vol)) if len(historical_vol) > 0 else 0,
+            'max': float(np.max(historical_vol)) if len(historical_vol) > 0 else 0,
+            'q25': float(np.percentile(historical_vol, 25)) if len(historical_vol) > 0 else 0,
+            'q50': float(np.percentile(historical_vol, 50)) if len(historical_vol) > 0 else 0,
+            'q75': float(np.percentile(historical_vol, 75)) if len(historical_vol) > 0 else 0,
+        }
 
-                from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-
-                mae = mean_absolute_error(y_true, y_pred)
-                rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-                r2 = r2_score(y_true, y_pred)
-                
-                metrics_by_horizon[horizon] = {
-                    'mae': float(mae),
-                    'rmse': float(rmse),
-                    'r2': float(r2)
-                }
-                
-                actual_vs_pred[horizon] = list(zip(
-                    df_with_target.loc[common_index, 'trade_date'].astype(str),
-                    y_true.tolist(),
-                    y_pred.tolist()
-                ))
-            else:
-                metrics_by_horizon[horizon] = {'mae': None, 'rmse': None, 'r2': None}
-                actual_vs_pred[horizon] = []
-
-        # 6. 计算分位数语义
-        percentiles_by_horizon = {}
-        historical_stats_by_horizon = {}
-        
-        for horizon in horizons:
-            target_col = f'rv_{horizon}_fut'
-            
-            # 使用实际历史波动率计算分位数
-            historical_rv = df_valid[target_col].dropna().values
-            
-            if len(historical_rv) > 0 and horizon in predictions_by_horizon:
-                latest_pred = predictions_by_horizon[horizon][-1]
-                
-                # 计算分位数 (预测值在历史分布中的位置)
-                percentile = (np.sum(historical_rv < latest_pred) / len(historical_rv)) * 100
-                
-                percentiles_by_horizon[horizon] = {
-                    'percentile': round(percentile, 1),
-                    'label': self._get_percentile_label(percentile),
-                    'description': self._get_percentile_description(percentile)
-                }
-                
-                historical_stats_by_horizon[horizon] = {
-                    'mean': float(np.mean(historical_rv)),
-                    'std': float(np.std(historical_rv)),
-                    'min': float(np.min(historical_rv)),
-                    'max': float(np.max(historical_rv)),
-                    'q25': float(np.percentile(historical_rv, 25)),
-                    'q50': float(np.percentile(historical_rv, 50)),
-                    'q75': float(np.percentile(historical_rv, 75)),
-                }
+        # 6. 计算评估指标 (如果有真实值)
+        metrics = None
+        if 'target_vol' in df_feat.columns:
+            df_eval = df_feat.dropna(subset=['target_vol'] + available_features)
+            if len(df_eval) > 10:
+                X_eval = df_eval[available_features]
+                y_true = df_eval['target_vol'].values
+                y_pred = np.exp(self.model.predict(X_eval))
+                metrics = ModelMetrics.calculate_all(y_true, y_pred)
 
         # 7. 构建结果
         result = {
             'ts_code': ts_code,
-            'data_period': f"最近{days}天",
-            'target_horizons': horizons,
-            'total_records': len(df),
-            'valid_predictions': len(df_valid),
-            'latest_predictions': {
-                h: float(predictions_by_horizon[h][-1]) 
-                for h in horizons
+            'prediction_type': 'next_day_volatility',
+            'prediction_target': 'Yang-Zhang volatility',
+            'predicted_volatility': float(pred_vol),
+            'percentile': {
+                'value': round(percentile, 1),
+                'label': self._get_percentile_label(percentile),
+                'description': self._get_percentile_description(percentile)
             },
-            'percentiles': percentiles_by_horizon,
-            'historical_stats': historical_stats_by_horizon,
-            'metrics': metrics_by_horizon,
-            'actual_vs_predicted': actual_vs_pred,
+            'historical_stats': historical_stats,
+            'metrics': metrics,
+            'data_period': f"最近{days}天",
+            'prediction_date': datetime.now().isoformat(),
         }
 
         return result
@@ -242,111 +191,60 @@ class IndexRiskPredictor:
         print(f"\n预测结果: {result['ts_code']}")
         print(f"{'=' * 60}")
 
-        print(f"\n数据概况:")
-        print(f"  时间范围: {result['data_period']}")
-        print(f"  总记录数: {result['total_records']}")
-        print(f"  有效预测数: {result['valid_predictions']}")
+        print(f"\n预测目标: {result['prediction_target']}")
+        print(f"\n【下一交易日波动率预测】")
+        print(f"  预测值: {result['predicted_volatility']:.6f}")
 
-        print(f"\n最新预测:")
-        for horizon in result['target_horizons']:
-            if horizon in result['latest_predictions']:
-                rv = result['latest_predictions'][horizon]
-                period = "一周" if horizon == 5 else "一月"
-                
-                print(f"\n  【{horizon}日 ({period})】")
-                print(f"    已实现波动率: {rv:.6f}")
-                
-                # 分位数语义
-                if horizon in result.get('percentiles', {}):
-                    p = result['percentiles'][horizon]
-                    print(f"    历史分位数: {p['percentile']}% ({p['label']})")
-                    print(f"    语义解读: {p['description']}")
-                
-                # 历史统计
-                if horizon in result.get('historical_stats', {}):
-                    stats = result['historical_stats'][horizon]
-                    print(f"    历史范围: [{stats['min']:.6f}, {stats['max']:.6f}]")
-                    print(f"    历史中位数: {stats['q50']:.6f}")
+        # 分位数语义
+        p = result['percentile']
+        print(f"  历史分位数: {p['value']}% ({p['label']})")
+        print(f"  语义解读: {p['description']}")
 
-        print(f"\n模型性能:")
-        for horizon in result['target_horizons']:
-            if horizon in result['metrics']:
-                metrics = result['metrics'][horizon]
-                period = "一周" if horizon == 5 else "一月"
-                if metrics['mae'] is not None:
-                    print(f"  {horizon}日 ({period}): MAE={metrics['mae']:.6f}, RMSE={metrics['rmse']:.6f}, R²={metrics['r2']:.4f}")
-                else:
-                    print(f"  {horizon}日 ({period}): (无评估数据)")
+        # 历史统计
+        stats = result['historical_stats']
+        print(f"\n历史波动率统计:")
+        print(f"  范围: [{stats['min']:.6f}, {stats['max']:.6f}]")
+        print(f"  均值: {stats['mean']:.6f}")
+        print(f"  中位数: {stats['q50']:.6f}")
+        print(f"  25%-75%分位: [{stats['q25']:.6f}, {stats['q75']:.6f}]")
+
+        # 模型性能
+        if result.get('metrics'):
+            metrics = result['metrics']
+            print(f"\n模型性能 (历史回测):")
+            print(f"  MAE: {metrics['mae']:.6f}")
+            print(f"  RMSE: {metrics['rmse']:.6f}")
+            print(f"  R²: {metrics['r2']:.4f}")
+            print(f"  方向准确率: {metrics['direction_accuracy']:.1f}%")
 
         return result
 
 
-def predict_index_risk(ts_code: str, days: int = 500, model_dir: str = None, horizons: list = None):
+def predict_volatility(ts_code: str, days: int = 300,
+                       model_dir: str = None,
+                       include_garch: bool = True) -> dict:
     """
-    便捷函数: 预测指数风险度
+    便捷函数：预测下一交易日波动率
 
     Args:
         ts_code: 指数代码
         days: 获取历史数据天数
-        model_dir: 模型目录路径
-        horizons: 预测窗口列表
+        model_dir: 模型目录
+        include_garch: 是否使用GARCH特征
 
     Returns:
-        dict: 预测结果
+        预测结果字典
     """
-    if model_dir is None:
-        model_dir = "ml/models"
-
-    predictor = IndexRiskPredictor(model_dir)
-    result = predictor.predict(ts_code, days, horizons)
+    predictor = VolatilityPredictor(model_dir)
+    result = predictor.predict(ts_code, days, include_garch)
     predictor.print_result(result)
-
     return result
 
 
-def predict_multi_indices(ts_codes: list, days: int = 500, model_dir: str = None, horizons: list = None):
-    """
-    便捷函数: 批量预测多个指数
-
-    Args:
-        ts_codes: 指数代码列表
-        days: 获取历史数据天数
-        model_dir: 模型目录路径
-        horizons: 预测窗口列表
-
-    Returns:
-        list: 预测结果列表
-    """
-    if model_dir is None:
-        model_dir = "ml/models"
-
-    predictor = IndexRiskPredictor(model_dir)
-    results = []
-
-    for i, code in enumerate(ts_codes, 1):
-        print(f"\n\n进度: {i}/{len(ts_codes)}")
-        try:
-            result = predictor.predict(code, days, horizons)
-            results.append(result)
-        except Exception as e:
-            print(f"预测 {code} 失败: {e}")
-            results.append({'ts_code': code, 'error': str(e)})
-
-    # 汇总
-    print(f"\n\n{'=' * 60}")
-    print("批量预测完成!")
-    print(f"{'=' * 60}")
-
-    success = sum(1 for r in results if 'latest_predictions' in r)
-    print(f"成功: {success}/{len(ts_codes)}")
-
-    return results
-
-
 if __name__ == "__main__":
-    # 示例: 预测上证指数风险度
-    result = predict_index_risk(
+    # 示例
+    result = predict_volatility(
         ts_code="000001.SH",
-        days=500,
-        horizons=[5, 20]  # 一周和一月
+        days=300,
+        include_garch=False  # 首次运行可能没有GARCH特征
     )

@@ -1,5 +1,6 @@
 """
-指数风险度预测工具 - LangChain工具
+指数波动率预测工具 - LangChain工具
+预测目标: 下一交易日 Yang-Zhang 波动率
 """
 from langchain.tools import tool
 import pandas as pd
@@ -13,8 +14,8 @@ def _get_predictor():
     """获取预测器实例"""
     global _predictor_instance
     if _predictor_instance is None:
-        from ml.predict import IndexRiskPredictor
-        _predictor_instance = IndexRiskPredictor()
+        from ml.predict import VolatilityPredictor
+        _predictor_instance = VolatilityPredictor()
     return _predictor_instance
 
 
@@ -31,26 +32,24 @@ COMMON_INDICES = {
 
 
 @tool
-def predict_index_risk(ts_code: str, days: int = 500) -> str:
-    """预测指数未来风险度 (已实现波动率)
+def predict_index_volatility(ts_code: str, days: int = 300) -> str:
+    """预测指数下一交易日的波动率
 
-    风险度越高表示指数波动越剧烈，投资风险越大。
-    同时预测 5日(一周) 和 20日(一月) 两个时间窗口的风险度，
-    并提供历史分位数语义解读。
+    基于Yang-Zhang波动率代理，预测下一交易日市场波动程度。
+    波动率越高表示市场风险越大。
 
     Args:
         ts_code: 指数代码 (如: 000001.SH 上证指数, 000300.SH 沪深300)
-        days: 获取历史数据的天数，默认500天
+        days: 获取历史数据的天数，默认300天
 
     Returns:
-        str: 风险度预测结果，包含预测值、历史分位数和语义解读
+        str: 波动率预测结果，包含预测值、历史分位数和风险解读
     """
-    # 获取指数名称
     index_name = COMMON_INDICES.get(ts_code, ts_code)
 
     try:
         predictor = _get_predictor()
-        result = predictor.predict(ts_code, days=days, horizons=[5, 20])
+        result = predictor.predict(ts_code, days=days, include_garch=True)
     except FileNotFoundError:
         return f"错误: 模型文件不存在，请先训练模型"
     except Exception as e:
@@ -58,88 +57,52 @@ def predict_index_risk(ts_code: str, days: int = 500) -> str:
 
     # 格式化输出
     lines = []
-    lines.append(f"## {index_name} ({ts_code}) 风险度预测")
+    lines.append(f"## {index_name} ({ts_code}) 波动率预测")
+    lines.append("")
+    lines.append("### 下一交易日波动率预测")
     lines.append("")
 
-    # 最新预测 - 两个时间窗口
-    lines.append("### 未来风险度预测")
+    vol = result['predicted_volatility']
+    percentile = result['percentile']
+
+    lines.append(f"- **预测波动率**: {vol:.6f}")
+    lines.append(f"- **历史分位数**: {percentile['value']}% ({percentile['label']})")
+    lines.append(f"- **风险解读**: {percentile['description']}")
     lines.append("")
-    
-    for horizon in [5, 20]:
-        if horizon in result['latest_predictions']:
-            rv = result['latest_predictions'][horizon]
-            period = "一周" if horizon == 5 else "一月"
-            
-            # 分位数语义
-            percentile_info = ""
-            if horizon in result.get('percentiles', {}):
-                p = result['percentiles'][horizon]
-                percentile_info = f" (历史分位: {p['percentile']}% - {p['label']})"
-            
-            # 风险等级判断
-            if rv < 0.015:
-                risk_level = "低风险"
-                risk_desc = "市场波动较小，适合稳健投资"
-            elif rv < 0.025:
-                risk_level = "中等风险"
-                risk_desc = "市场波动正常，可保持原有策略"
-            elif rv < 0.04:
-                risk_level = "较高风险"
-                risk_desc = "市场波动较大，建议适当控制仓位"
-            else:
-                risk_level = "高风险"
-                risk_desc = "市场波动剧烈，建议谨慎操作"
 
-            lines.append(f"**未来{horizon}日 ({period})**{percentile_info}:")
-            lines.append(f"- 已实现波动率: **{rv:.6f}**")
-            lines.append(f"- 风险等级: {risk_level}")
-            
-            # 分位数描述
-            if horizon in result.get('percentiles', {}):
-                lines.append(f"- 语义解读: {result['percentiles'][horizon]['description']}")
-            else:
-                lines.append(f"- 风险描述: {risk_desc}")
-            
-            # 历史统计参考
-            if horizon in result.get('historical_stats', {}):
-                stats = result['historical_stats'][horizon]
-                lines.append(f"- 历史参考: 中位数 {stats['q50']:.6f}, 范围 [{stats['min']:.6f}, {stats['max']:.6f}]")
-            
-            lines.append("")
-
-    # 数据概况
-    lines.append("### 数据概况")
-    lines.append(f"- 时间范围: {result['data_period']}")
-    lines.append(f"- 有效预测数: {result['valid_predictions']}")
+    # 历史统计
+    stats = result['historical_stats']
+    lines.append("### 历史波动率参考")
+    lines.append(f"- 范围: [{stats['min']:.6f}, {stats['max']:.6f}]")
+    lines.append(f"- 均值: {stats['mean']:.6f}")
+    lines.append(f"- 中位数: {stats['q50']:.6f}")
+    lines.append(f"- 25%-75%分位: [{stats['q25']:.6f}, {stats['q75']:.6f}]")
     lines.append("")
 
     # 模型性能
-    lines.append("### 模型性能")
-    for horizon in [5, 20]:
-        if horizon in result['metrics']:
-            metrics = result['metrics'][horizon]
-            period = "一周" if horizon == 5 else "一月"
-            if metrics['mae'] is not None:
-                lines.append(f"- {horizon}日 ({period}): MAE={metrics['mae']:.6f}, R²={metrics['r2']:.4f}")
-            else:
-                lines.append(f"- {horizon}日 ({period}): (无评估数据)")
+    if result.get('metrics'):
+        metrics = result['metrics']
+        lines.append("### 模型性能 (历史回测)")
+        lines.append(f"- MAE: {metrics['mae']:.6f}")
+        lines.append(f"- RMSE: {metrics['rmse']:.6f}")
+        lines.append(f"- R²: {metrics['r2']:.4f}")
+        lines.append(f"- 方向准确率: {metrics['direction_accuracy']:.1f}%")
 
     return "\n".join(lines)
 
 
 @tool
-def compare_index_risk(ts_codes: str, days: int = 500) -> str:
-    """对比多个指数的风险度
+def compare_index_volatility(ts_codes: str, days: int = 300) -> str:
+    """对比多个指数的波动率
 
-    同时对比 5日(一周) 和 20日(一月) 两个时间窗口的风险度，
-    并展示各指数的历史分位数。
+    对比各指数下一交易日波动率预测值及其历史分位数。
 
     Args:
         ts_codes: 指数代码列表，用逗号分隔 (如: "000001.SH,399006.SZ,000300.SH")
-        days: 获取历史数据的天数，默认500
+        days: 获取历史数据的天数，默认300
 
     Returns:
-        str: 多指数风险度对比结果
+        str: 多指数波动率对比结果
     """
     try:
         predictor = _get_predictor()
@@ -151,9 +114,8 @@ def compare_index_risk(ts_codes: str, days: int = 500) -> str:
 
     for code in codes:
         try:
-            result = predictor.predict(code, days=days, horizons=[5, 20])
-            if 'latest_predictions' in result:
-                results.append(result)
+            result = predictor.predict(code, days=days, include_garch=True)
+            results.append(result)
         except Exception:
             continue
 
@@ -162,64 +124,44 @@ def compare_index_risk(ts_codes: str, days: int = 500) -> str:
 
     # 对比分析
     lines = []
-    lines.append("## 多指数风险度对比分析")
+    lines.append("## 多指数波动率对比分析")
     lines.append("")
-    
-    for horizon in [5, 20]:
-        period = "一周" if horizon == 5 else "一月"
-        lines.append(f"### {horizon}日 ({period}) 风险度预测")
-        lines.append("| 指数 | 代码 | 预测波动率 | 历史分位 | 风险等级 |")
-        lines.append("|------|------|-----------|---------|---------|")
+    lines.append("| 指数 | 代码 | 预测波动率 | 历史分位 | 风险等级 |")
+    lines.append("|------|------|-----------|---------|---------|")
 
-        sorted_results = sorted(results, key=lambda x: x['latest_predictions'].get(horizon, 0), reverse=True)
-        
-        for r in sorted_results:
-            code = r['ts_code']
-            name = COMMON_INDICES.get(code, code)
-            rv = r['latest_predictions'].get(horizon, 0)
-            
-            # 分位数
-            percentile_str = "-"
-            if horizon in r.get('percentiles', {}):
-                p = r['percentiles'][horizon]
-                percentile_str = f"{p['percentile']}% ({p['label']})"
+    sorted_results = sorted(results, key=lambda x: x['predicted_volatility'], reverse=True)
 
-            if rv < 0.015:
-                level = "低"
-            elif rv < 0.025:
-                level = "中"
-            elif rv < 0.04:
-                level = "较高"
-            else:
-                level = "高"
+    for r in sorted_results:
+        code = r['ts_code']
+        name = COMMON_INDICES.get(code, code)
+        vol = r['predicted_volatility']
+        p = r['percentile']
 
-            lines.append(f"| {name} | {code} | {rv:.6f} | {percentile_str} | {level} |")
-        lines.append("")
+        lines.append(f"| {name} | {code} | {vol:.6f} | {p['value']}% ({p['label']}) | {p['label']} |")
 
-    # 综合评价 - 基于5日预测
-    if results:
-        highest = max(results, key=lambda x: x['latest_predictions'].get(5, 0))
-        lowest = min(results, key=lambda x: x['latest_predictions'].get(5, 0))
+    lines.append("")
 
-        lines.append("### 综合评价 (基于一周风险度)")
-        lines.append(f"- **最高风险**: {COMMON_INDICES.get(highest['ts_code'], highest['ts_code'])} "
-                     f"(波动率={highest['latest_predictions'].get(5, 0):.6f})")
-        lines.append(f"- **最低风险**: {COMMON_INDICES.get(lowest['ts_code'], lowest['ts_code'])} "
-                     f"(波动率={lowest['latest_predictions'].get(5, 0):.6f})")
-        lines.append("")
+    # 综合评价
+    highest = sorted_results[0]
+    lowest = sorted_results[-1]
+
+    lines.append("### 综合评价")
+    lines.append(f"- **最高波动**: {COMMON_INDICES.get(highest['ts_code'], highest['ts_code'])} "
+                 f"(波动率={highest['predicted_volatility']:.6f}, {highest['percentile']['label']})")
+    lines.append(f"- **最低波动**: {COMMON_INDICES.get(lowest['ts_code'], lowest['ts_code'])} "
+                 f"(波动率={lowest['predicted_volatility']:.6f}, {lowest['percentile']['label']})")
 
     return "\n".join(lines)
 
 
 @tool
-def get_market_risk_summary() -> str:
-    """获取市场整体风险摘要 (主要指数风险度快速查询)
+def get_market_volatility_summary() -> str:
+    """获取市场整体波动率摘要 (主要指数快速查询)
 
-    同时展示 5日(一周) 和 20日(一月) 两个时间窗口的风险度，
-    以及历史分位数语义。
+    展示主要指数下一交易日波动率预测及历史分位数。
 
     Returns:
-        str: 市场风险摘要
+        str: 市场波动率摘要
     """
     try:
         predictor = _get_predictor()
@@ -232,61 +174,49 @@ def get_market_risk_summary() -> str:
     results = []
     for code in main_indices:
         try:
-            result = predictor.predict(code, days=500, horizons=[5, 20])
-            if 'latest_predictions' in result:
-                results.append(result)
+            result = predictor.predict(code, days=300, include_garch=True)
+            results.append(result)
         except Exception:
             continue
 
     if not results:
-        return "无法获取市场风险数据"
+        return "无法获取市场波动率数据"
 
     # 格式化输出
     lines = []
-    lines.append("## 市场风险摘要")
+    lines.append("## 市场波动率摘要")
     lines.append("")
 
     for r in results:
         code = r['ts_code']
         name = COMMON_INDICES.get(code, code)
+        vol = r['predicted_volatility']
+        p = r['percentile']
 
         lines.append(f"### {name}")
-        
-        for horizon in [5, 20]:
-            rv = r['latest_predictions'].get(horizon, 0)
-            period = "一周" if horizon == 5 else "一月"
-
-            # 分位数信息
-            percentile_str = ""
-            if horizon in r.get('percentiles', {}):
-                p = r['percentiles'][horizon]
-                percentile_str = f" | 分位: {p['percentile']}% ({p['label']})"
-
-            if rv < 0.015:
-                level = "🟢 低风险"
-            elif rv < 0.025:
-                level = "🟡 中等风险"
-            elif rv < 0.04:
-                level = "🟠 较高风险"
-            else:
-                level = "🔴 高风险"
-
-            lines.append(f"- {period}风险度: **{rv:.6f}** ({level}){percentile_str}")
-        
+        lines.append(f"- 预测波动率: **{vol:.6f}**")
+        lines.append(f"- 历史分位: {p['value']}% ({p['label']})")
+        lines.append(f"- 风险解读: {p['description']}")
         lines.append("")
 
-    # 整体风险判断 - 基于5日预测
-    avg_rv = sum(r['latest_predictions'].get(5, 0) for r in results) / len(results)
-    if avg_rv < 0.015:
-        overall = "整体市场波动较小，投资环境相对稳定"
-    elif avg_rv < 0.025:
-        overall = "整体市场波动正常，可按原策略操作"
-    elif avg_rv < 0.04:
-        overall = "整体市场波动较大，建议控制仓位"
+    # 整体判断
+    avg_vol = sum(r['predicted_volatility'] for r in results) / len(results)
+    avg_pct = sum(r['percentile']['value'] for r in results) / len(results)
+
+    if avg_pct < 25:
+        overall = "整体市场波动率处于历史低位，投资环境相对稳定"
+    elif avg_pct < 50:
+        overall = "整体市场波动率低于历史中位，风险较低"
+    elif avg_pct < 75:
+        overall = "整体市场波动率处于历史中等水平"
+    elif avg_pct < 90:
+        overall = "整体市场波动率偏高，建议控制仓位"
     else:
-        overall = "整体市场波动剧烈，建议谨慎观望"
+        overall = "整体市场波动率处于历史高位，建议谨慎观望"
 
     lines.append("### 市场整体判断")
-    lines.append(overall)
+    lines.append(f"- 平均波动率: {avg_vol:.6f}")
+    lines.append(f"- 平均分位数: {avg_pct:.1f}%")
+    lines.append(f"- 综合评价: {overall}")
 
     return "\n".join(lines)

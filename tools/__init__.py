@@ -32,10 +32,15 @@ from .common_tools import (
 )
 
 from .volatility_tools import (
-    predict_index_risk,
-    compare_index_risk,
-    get_market_risk_summary,
+    predict_index_volatility,
+    compare_index_volatility,
+    get_market_volatility_summary,
 )
+
+# 兼容旧名称
+predict_index_risk = predict_index_volatility
+compare_index_risk = compare_index_volatility
+get_market_risk_summary = get_market_volatility_summary
 
 from .websearch_tools import web_search
 
