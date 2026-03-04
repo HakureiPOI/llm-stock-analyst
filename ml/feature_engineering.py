@@ -28,6 +28,26 @@ class IndexRiskFeatureEngineering:
         # 绝对收益率
         df['abs_ret'] = np.abs(df['log_ret'])
 
+        # 振幅与开盘跳空
+        df['hl_spread'] = np.log(df['high'] / df['low'])
+        df['oc_ret'] = np.log(df['close'] / df['open'])
+        df['gap_ret'] = np.log(df['open'] / df['pre_close'])
+
+        return df
+
+    def calculate_rolling_distribution_features(self, df: pd.DataFrame, windows: list = [5, 20, 60]) -> pd.DataFrame:
+        """计算滚动分布特征（偏度/峰度/分位差）。"""
+        df = df.copy()
+
+        for w in windows:
+            rolling_log_ret = df['log_ret'].rolling(w)
+            df[f'log_ret_std_{w}'] = rolling_log_ret.std()
+            df[f'log_ret_skew_{w}'] = rolling_log_ret.skew()
+            df[f'log_ret_kurt_{w}'] = rolling_log_ret.kurt()
+            q75 = rolling_log_ret.quantile(0.75)
+            q25 = rolling_log_ret.quantile(0.25)
+            df[f'log_ret_iqr_{w}'] = q75 - q25
+
         return df
 
     def calculate_future_rv(self, df: pd.DataFrame, horizons: list = [5, 20]) -> pd.DataFrame:
@@ -179,7 +199,11 @@ class IndexRiskFeatureEngineering:
         print("  - 计算波动率比率...")
         df = self.calculate_rv_ratios(df)
 
-        # 8. 删除中间列
+        # 8. 计算收益分布特征
+        print("  - 计算收益分布特征...")
+        df = self.calculate_rolling_distribution_features(df)
+
+        # 9. 删除中间列
         df = df.drop(columns=['log_hl', 'pk_var'], errors='ignore')
 
         print(f"特征工程完成: {len(df)} 条记录, {len(df.columns)} 个特征")

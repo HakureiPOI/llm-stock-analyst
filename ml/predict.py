@@ -18,7 +18,7 @@ class IndexRiskPredictor:
             model_dir: 模型目录路径
         """
         self.model_dir = Path(model_dir)
-        self.models = {}  # {horizon: model}
+        self.models = {}  # {horizon: model_bundle}
         self.feature_cols = None
         self.fe = IndexRiskFeatureEngineering()
         self._load_models()
@@ -37,8 +37,17 @@ class IndexRiskPredictor:
             
             with open(model_file, 'rb') as f:
                 data = pickle.load(f)
-            
-            self.models[horizon] = data['model']
+
+            model_obj = data['model']
+            # 兼容旧模型格式（仅LightGBM）
+            if isinstance(model_obj, dict):
+                self.models[horizon] = model_obj
+            else:
+                self.models[horizon] = {
+                    'lgb_model': model_obj,
+                    'ridge_model': None,
+                    'blend_weight_lgb': 1.0,
+                }
             
             if self.feature_cols is None:
                 self.feature_cols = data['feature_cols']
@@ -122,8 +131,18 @@ class IndexRiskPredictor:
         # 4. 预测每个时间窗口
         predictions_by_horizon = {}
         for horizon in horizons:
-            model = self.models[horizon]
-            pred = np.exp(model.predict(X))  # 反对数变换
+            bundle = self.models[horizon]
+            lgb_model = bundle['lgb_model']
+            ridge_model = bundle.get('ridge_model')
+            blend_weight = float(bundle.get('blend_weight_lgb', 1.0))
+
+            pred_lgb = np.exp(lgb_model.predict(X))
+            if ridge_model is not None:
+                pred_ridge = np.exp(ridge_model.predict(X))
+                pred = blend_weight * pred_lgb + (1.0 - blend_weight) * pred_ridge
+            else:
+                pred = pred_lgb
+
             predictions_by_horizon[horizon] = pred
 
         # 5. 计算模型表现
