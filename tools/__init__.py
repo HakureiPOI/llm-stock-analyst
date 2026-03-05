@@ -37,11 +37,6 @@ from .volatility_tools import (
     get_market_volatility_summary,
 )
 
-# 兼容旧名称
-predict_index_risk = predict_index_volatility
-compare_index_risk = compare_index_volatility
-get_market_risk_summary = get_market_volatility_summary
-
 from .websearch_tools import web_search
 
 __all__ = [
@@ -67,10 +62,10 @@ __all__ = [
     # 通用工具
     "get_current_time",
     "get_stock_market_status",
-    # 指数风险度预测工具
-    "predict_index_risk",
-    "compare_index_risk",
-    "get_market_risk_summary",
+    # 波动率预测工具
+    "predict_index_volatility",
+    "compare_index_volatility",
+    "get_market_volatility_summary",
     # 联网搜索工具
     "web_search",
 ]
