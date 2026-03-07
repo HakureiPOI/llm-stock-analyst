@@ -37,8 +37,8 @@ def predict_index_volatility(ts_code: str, days: int = 300) -> str:
 
     返回原始预测数据，包括：
     - 预测波动率值
-    - 历史分位数统计
-    - 波动趋势变化
+    - 多维度分位数统计（滚动窗口）
+    - 语义指标（偏离度、趋势、聚类状态、风险等级）
     - SHAP特征贡献度
     - 模型性能指标
 
@@ -69,8 +69,9 @@ def predict_index_volatility(ts_code: str, days: int = 300) -> str:
         "percentile": result['percentile'],
         "historical_stats": result['historical_stats'],
         "volatility_trend": result.get('volatility_trend'),
+        "semantic_metrics": result.get('semantic_metrics'),
         "shap_analysis": result.get('shap_analysis'),
-        "metrics": result.get('metrics'),
+        "model_metrics": result.get('model_metrics'),
     }, ensure_ascii=False, indent=2)
 
 
@@ -103,6 +104,7 @@ def compare_index_volatility(ts_codes: str, days: int = 300) -> str:
                 "volatility_pct": result['volatility_pct'],
                 "percentile": result['percentile'],
                 "volatility_trend": result.get('volatility_trend'),
+                "semantic_metrics": result.get('semantic_metrics'),
             })
         except Exception:
             continue
@@ -142,6 +144,7 @@ def get_market_volatility_summary() -> str:
                 "volatility_pct": result['volatility_pct'],
                 "percentile": result['percentile'],
                 "volatility_trend": result.get('volatility_trend'),
+                "semantic_metrics": result.get('semantic_metrics'),
                 "shap_analysis": result.get('shap_analysis'),
             })
         except Exception:
