@@ -1,7 +1,17 @@
 """
-波动率预测特征工程 V2 - 基于专业方案
-预测目标：下一交易日的 Yang-Zhang 波动率代理
+波动率预测特征工程 V2
+预测目标：下一交易日的滚动窗口 Yang-Zhang 波动率
 特征体系：基础日频特征 + OHLC区间特征 + GARCH特征
+
+Yang-Zhang 波动率定义 (标准滚动窗口形式):
+    σ²_YZ = σ²_o + k·σ²_c + (1-k)·σ²_RS
+    
+其中:
+    - r_o = ln(O_t / C_{t-1})  隔夜收益率
+    - r_c = ln(C_t / O_t)      日内收益率
+    - RS = Rogers-Satchell 日内波动估计
+    - k = 0.34 / (1.34 + (n+1)/(n-1))  最优权重
+    - n 为滚动窗口长度
 """
 import pandas as pd
 import numpy as np
@@ -36,34 +46,6 @@ class VolatilityTargets:
         return np.sqrt(u * (u - c) + d * (d - c))
 
     @staticmethod
-    def yang_zhang_volatility(open_: np.ndarray, high: np.ndarray,
-                               low: np.ndarray, close: np.ndarray,
-                               prev_close: np.ndarray, n: int = 1) -> float:
-        """
-        Yang-Zhang 波动率 (单日)
-        结合隔夜跳空和日内波动
-
-        Args:
-            open_, high, low, close: 当日OHLC
-            prev_close: 前一日收盘价
-            n: 通常为1 (单日)
-        """
-        # 隔夜波动 (open jump)
-        rs_open = np.log(open_ / prev_close) ** 2
-
-        # Rogers-Satchell 日内波动
-        u = np.log(high / open_)
-        d = np.log(low / open_)
-        c = np.log(close / open_)
-        rs_day = u * (u - c) + d * (d - c)
-
-        # Yang-Zhang 权重
-        k = 0.34 / (1.34 + (n + 1) / (n - 1))
-
-        # 组合
-        return np.sqrt(rs_open + k * rs_day + (1 - k) * rs_day)
-
-    @staticmethod
     def log_squared_return(close: np.ndarray, prev_close: np.ndarray,
                            epsilon: float = 1e-10) -> float:
         """对数平方收益率 (无OHLC时的替代目标)"""
@@ -75,8 +57,17 @@ class OHLCFeatures:
     """OHLC 区间特征"""
 
     @staticmethod
-    def calculate_range_features(df: pd.DataFrame) -> pd.DataFrame:
-        """计算所有区间型波动特征"""
+    def calculate_range_features(df: pd.DataFrame, yz_window: int = 20) -> pd.DataFrame:
+        """
+        计算所有区间型波动特征（含标准滚动窗口 Yang-Zhang 波动率）
+        
+        Args:
+            df: 包含 OHLC 数据的 DataFrame
+            yz_window: Yang-Zhang 滚动窗口长度，默认 20 日
+            
+        Returns:
+            添加波动特征后的 DataFrame
+        """
         df = df.copy()
 
         # 基础区间
@@ -84,12 +75,12 @@ class OHLCFeatures:
         df['oc_range'] = np.abs(np.log(df['close'] / df['open']))
         df['co_gap'] = np.log(df['open'] / df['pre_close'])  # 隔夜跳空
 
-        # Parkinson 波动率
+        # Parkinson 波动率（单日）
         df['parkinson_vol'] = np.sqrt(
             (np.log(df['high'] / df['low']) ** 2) / (4 * np.log(2))
         )
 
-        # Garman-Klass 波动率
+        # Garman-Klass 波动率（单日）
         hl = np.log(df['high'] / df['open'])
         ll = np.log(df['low'] / df['open'])
         co = np.log(df['close'] / df['open'])
@@ -97,17 +88,37 @@ class OHLCFeatures:
             0.5 * (hl - ll) ** 2 - (2 * np.log(2) - 1) * co ** 2
         )
 
-        # Rogers-Satchell 波动率
+        # Rogers-Satchell 波动率（单日）
         u = np.log(df['high'] / df['open'])
         d = np.log(df['low'] / df['open'])
         c = np.log(df['close'] / df['open'])
-        df['rogers_satchell_vol'] = np.sqrt(u * (u - c) + d * (d - c))
+        rs = u * (u - c) + d * (d - c)
+        df['rogers_satchell_vol'] = np.sqrt(np.maximum(rs, 0))
 
-        # Yang-Zhang 波动率
-        rs_open = np.log(df['open'] / df['pre_close']) ** 2
-        rs_day = u * (u - c) + d * (d - c)
-        k = 0.34 / 1.34  # 简化权重
-        df['yang_zhang_vol'] = np.sqrt(rs_open + k * rs_day + (1 - k) * rs_day)
+        # ========= 标准 Yang-Zhang（滚动窗口） =========
+        # 隔夜收益率: r_o = ln(O_t / C_{t-1})
+        r_o = np.log(df['open'] / df['pre_close'])
+        
+        # 日内收益率: r_c = ln(C_t / O_t)
+        r_c = np.log(df['close'] / df['open'])
+
+        n = yz_window
+        if n <= 1:
+            raise ValueError("yz_window must be > 1 for standard Yang-Zhang volatility.")
+
+        # 最优权重 k
+        k = 0.34 / (1.34 + (n + 1) / (n - 1))
+
+        # 滚动窗口方差估计 (ddof=1 为样本方差)
+        sigma_o2 = r_o.rolling(n).var(ddof=1)
+        sigma_c2 = r_c.rolling(n).var(ddof=1)
+        
+        # Rogers-Satchell 波动率的滚动平均
+        sigma_rs2 = rs.rolling(n).mean()
+
+        # Yang-Zhang 方差估计
+        yz_var = sigma_o2 + k * sigma_c2 + (1 - k) * sigma_rs2
+        df['yang_zhang_vol'] = np.sqrt(np.maximum(yz_var, 0))
 
         return df
 
@@ -222,21 +233,25 @@ class DailyFeatures:
 class VolatilityFeatureEngineering:
     """波动率预测特征工程主类"""
 
-    def __init__(self):
+    def __init__(self, yz_window: int = 20):
+        """
+        Args:
+            yz_window: Yang-Zhang 滚动窗口长度，默认 20 日
+        """
+        self.yz_window = yz_window
         self.ohlc_features = OHLCFeatures()
         self.daily_features = DailyFeatures()
 
     def calculate_target(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        计算预测目标：下一交易日的 Yang-Zhang 波动率
+        计算预测目标：下一交易日的滚动窗口 Yang-Zhang 波动率
 
-        目标变量：t+1 日的 Yang-Zhang 波动率
+        目标变量：y_t = log(σ_YZ,t+1 + ε)
         在 t 日收盘后可用 t 日及之前数据预测
         """
         df = df.copy()
 
         # 计算 t+1 的 Yang-Zhang 波动率
-        # 需要 t+1 的 OHLC 和 t 的 close
         df['target_vol'] = df['yang_zhang_vol'].shift(-1)
 
         # 对数变换 (使目标更稳定)
@@ -256,7 +271,7 @@ class VolatilityFeatureEngineering:
         Returns:
             DataFrame: 特征工程后的数据
         """
-        print("开始特征工程...")
+        print(f"开始特征工程 (Yang-Zhang 窗口: {self.yz_window}日)...")
 
         # 排序
         df = df.sort_values('trade_date').reset_index(drop=True)
@@ -273,9 +288,9 @@ class VolatilityFeatureEngineering:
         print("  - 计算成交量特征...")
         df = self.daily_features.add_volume_features(df)
 
-        # 4. OHLC区间特征
-        print("  - 计算OHLC区间特征...")
-        df = self.ohlc_features.calculate_range_features(df)
+        # 4. OHLC区间特征（含标准滚动窗口 Yang-Zhang）
+        print(f"  - 计算OHLC区间特征 (YZ窗口={self.yz_window})...")
+        df = self.ohlc_features.calculate_range_features(df, yz_window=self.yz_window)
 
         # 5. 区间特征滚动统计
         print("  - 计算区间特征滚动统计...")
@@ -302,18 +317,20 @@ class VolatilityFeatureEngineering:
         return [col for col in df.columns if col not in drop_cols]
 
 
-def create_volatility_features(input_file: str, output_file: str = None) -> pd.DataFrame:
+def create_volatility_features(input_file: str, output_file: str = None,
+                                yz_window: int = 20) -> pd.DataFrame:
     """
     从数据文件创建特征
 
     Args:
         input_file: 输入数据文件路径
         output_file: 输出文件路径
+        yz_window: Yang-Zhang 滚动窗口长度
 
     Returns:
         DataFrame: 包含特征的数据
     """
-    fe = VolatilityFeatureEngineering()
+    fe = VolatilityFeatureEngineering(yz_window=yz_window)
 
     print(f"读取数据: {input_file}")
     df = pd.read_csv(input_file)
@@ -336,6 +353,7 @@ def create_volatility_features(input_file: str, output_file: str = None) -> pd.D
 if __name__ == "__main__":
     ml_dir = Path(__file__).parent
     df = create_volatility_features(
-        input_file=str(ml_dir / "dataset" / "index_daily_000001_SH_5years.csv"),
-        output_file=str(ml_dir / "dataset" / "index_features.csv")
+        input_file=str(ml_dir / "dataset" / "index_daily_000001_SH_10years.csv"),
+        output_file=str(ml_dir / "dataset" / "index_features.csv"),
+        yz_window=20
     )

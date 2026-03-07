@@ -1,7 +1,7 @@
 """
 波动率预测模型训练 V2
 主模型：LightGBM + 基础特征 + OHLC区间特征 + GARCH特征
-基线模型：EWMA, GARCH, EGARCH, GJR-GARCH
+基线模型：Naive, MA, EWMA
 """
 import pandas as pd
 import numpy as np
@@ -12,7 +12,10 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from .baseline_models import ModelMetrics, BaselineComparator
+try:
+    from .baseline_models import ModelMetrics, BaselineComparator
+except ImportError:
+    from baseline_models import ModelMetrics, BaselineComparator
 
 
 class VolatilityModel:
@@ -293,7 +296,10 @@ def run_full_training(data_file: str = None,
     # 添加GARCH特征
     if include_garch:
         try:
-            from .garch_features import add_garch_features_to_df
+            try:
+                from .garch_features import add_garch_features_to_df
+            except ImportError:
+                from garch_features import add_garch_features_to_df
             print("\n添加GARCH特征...")
             df = add_garch_features_to_df(df, min_train_size=500)
         except Exception as e:
