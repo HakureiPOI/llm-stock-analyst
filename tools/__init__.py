@@ -37,6 +37,11 @@ from .volatility_tools import (
     get_market_volatility_summary,
 )
 
+from .recommendation_tools import (
+    search_institution_recommendations,
+    search_hot_stocks,
+)
+
 from .websearch_tools import web_search
 
 __all__ = [
@@ -66,6 +71,9 @@ __all__ = [
     "predict_index_volatility",
     "compare_index_volatility",
     "get_market_volatility_summary",
+    # 推荐工具
+    "search_institution_recommendations",
+    "search_hot_stocks",
     # 联网搜索工具
     "web_search",
 ]

@@ -4,6 +4,7 @@ from langchain.tools import tool
 from .stock_specialist import create_stock_specialist
 from .index_specialist import create_index_specialist
 from .volatility_specialist import create_volatility_specialist
+from .recommendation_specialist import create_recommendation_specialist
 from .base import Context
 
 
@@ -11,6 +12,7 @@ from .base import Context
 _stock_specialist = create_stock_specialist(use_memory=False)
 _index_specialist = create_index_specialist(use_memory=False)
 _volatility_specialist = create_volatility_specialist(use_memory=False)
+_recommendation_specialist = create_recommendation_specialist(use_memory=False)
 
 
 @tool
@@ -108,9 +110,43 @@ def call_volatility_expert(query: str) -> str:
         return f"波动率专家调用失败: {str(e)}"
 
 
+@tool
+def call_recommendation_expert(query: str) -> str:
+    """当用户需要股票推荐或想了解机构观点时，调用此工具。
+
+    适用于以下场景:
+    - 用户询问"推荐几只股票"
+    - 用户想了解机构最近推荐哪些股票
+    - 用户想了解当前市场热点股
+    - 用户想按行业筛选推荐标的
+
+    注意：此工具仅返回机构推荐列表，如需深度分析请再调用股票专家。
+
+    Args:
+        query: 用户对推荐的具体需求，可包含行业偏好
+
+    Returns:
+        推荐专家返回的机构推荐列表
+    """
+    try:
+        response = _recommendation_specialist.invoke(
+            {"messages": [{"role": "user", "content": query}]},
+            context=Context(user_id="recommendation_expert")
+        )
+        # 返回最后一条消息的内容
+        messages = response.get('messages', [])
+        if messages:
+            last_msg = messages[-1]
+            return last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
+        return "推荐专家返回了空结果"
+    except Exception as e:
+        return f"推荐专家调用失败: {str(e)}"
+
+
 __all__ = [
     "call_stock_expert",
     "call_index_expert",
     "call_volatility_expert",
+    "call_recommendation_expert",
 ]
 
