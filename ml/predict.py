@@ -21,6 +21,154 @@ except ImportError:
     SHAP_AVAILABLE = False
 
 
+# 特征语义解释字典
+FEATURE_SEMANTICS = {
+    # 当前波动率相关
+    'yang_zhang_vol': {
+        'name': '当前Yang-Zhang波动率',
+        'meaning': '当日基于OHLC计算的综合性波动率估计',
+        'impact': '正值表示推高预测，说明当前高波动会延续；负值表示压低预测',
+    },
+    'yang_zhang_vol_lag1': {
+        'name': '前一日波动率',
+        'meaning': '昨日Yang-Zhang波动率',
+        'impact': '反映波动率的短期持续性',
+    },
+    'yang_zhang_vol_lag2': {
+        'name': '前两日波动率',
+        'meaning': '两日前的波动率水平',
+        'impact': '反映短期波动趋势',
+    },
+    'yang_zhang_vol_std20': {
+        'name': '波动率20日标准差',
+        'meaning': '近20日波动率的离散程度',
+        'impact': '高标准差表示波动不稳定，可能继续高波动',
+    },
+    'yang_zhang_vol_zscore20': {
+        'name': '波动率20日Z分数',
+        'meaning': '当前波动率相对20日均值的偏离程度',
+        'impact': '正Z-score表示当前波动率高于近期均值',
+    },
+    'yang_zhang_vol_ma5': {
+        'name': '波动率5日均值',
+        'meaning': '近5日波动率的平均水平',
+        'impact': '短期波动趋势参考',
+    },
+    'yang_zhang_vol_ma20': {
+        'name': '波动率20日均值',
+        'meaning': '近20日波动率的平均水平',
+        'impact': '中期波动趋势参考',
+    },
+
+    # 其他波动率估计量
+    'parkinson_vol': {
+        'name': 'Parkinson波动率',
+        'meaning': '基于日内高低价的波动率估计',
+        'impact': '反映日内波动特征',
+    },
+    'garman_klass_vol': {
+        'name': 'Garman-Klass波动率',
+        'meaning': '结合高低价和收盘价的波动率估计',
+        'impact': '更精确的日内波动估计',
+    },
+    'rogers_satchell_vol': {
+        'name': 'Rogers-Satchell波动率',
+        'meaning': '考虑价格趋势的波动率估计',
+        'impact': '对有趋势的市场更准确',
+    },
+
+    # 下行/上行波动
+    'downside_vol_20': {
+        'name': '20日下行波动率',
+        'meaning': '仅统计下跌日的波动情况',
+        'impact': '正值表示下跌风险增加',
+    },
+    'upside_vol_20': {
+        'name': '20日上行波动率',
+        'meaning': '仅统计上涨日的波动情况',
+        'impact': '反映上涨过程中的波动',
+    },
+
+    # GARCH特征
+    'garch_vol': {
+        'name': 'GARCH波动率',
+        'meaning': 'GARCH模型预测的条件波动率',
+        'impact': '反映波动率聚类特征',
+    },
+    'egarch_vol': {
+        'name': 'EGARCH波动率',
+        'meaning': '非对称GARCH，捕捉杠杆效应',
+        'impact': '反映下跌时波动放大效应',
+    },
+    'gjr_vol': {
+        'name': 'GJR-GARCH波动率',
+        'meaning': '门限GARCH，捕捉非对称响应',
+        'impact': '反映负面冲击对波动的影响',
+    },
+
+    # 收益率特征
+    'ret_std_20': {
+        'name': '20日收益率标准差',
+        'meaning': '近20日收益率波动程度',
+        'impact': '传统波动率度量',
+    },
+    'abs_ret_mean_10': {
+        'name': '10日绝对收益均值',
+        'meaning': '近10日平均单日涨跌幅度',
+        'impact': '反映近期市场活跃度',
+    },
+    'abs_ret_mean_20': {
+        'name': '20日绝对收益均值',
+        'meaning': '近20日平均单日涨跌幅度',
+        'impact': '中期市场活跃度指标',
+    },
+    'abs_ret_mean_60': {
+        'name': '60日绝对收益均值',
+        'meaning': '近60日平均单日涨跌幅度',
+        'impact': '长期市场活跃度指标',
+    },
+    'ret_cum_20': {
+        'name': '20日累计收益率',
+        'meaning': '近20日总涨跌幅度',
+        'impact': '反映近期市场趋势方向',
+    },
+
+    # 区间特征
+    'co_gap': {
+        'name': '隔夜跳空',
+        'meaning': '开盘价相对前收盘价的跳空幅度',
+        'impact': '正值表示跳空高开，负值表示跳空低开；反映隔夜信息冲击',
+    },
+    'co_gap_std10': {
+        'name': '隔夜跳空10日标准差',
+        'meaning': '近10日隔夜跳空的稳定性',
+        'impact': '高值表示隔夜信息冲击不稳定',
+    },
+    'oc_range': {
+        'name': '日内振幅',
+        'meaning': '收盘价相对开盘价的波动',
+        'impact': '反映日内交易活跃度',
+    },
+    'hl_range': {
+        'name': '日内高低点区间',
+        'meaning': '当日最高价与最低价的差距',
+        'impact': '反映日内波动范围',
+    },
+
+    # 成交量特征
+    'log_vol': {
+        'name': '成交量对数',
+        'meaning': '当日成交量的对数值',
+        'impact': '高成交量通常伴随高波动',
+    },
+    'vol_ratio_20': {
+        'name': '成交量比率',
+        'meaning': '当日成交量相对20日均值比率',
+        'impact': '>1表示放量，<1表示缩量；放量通常伴随高波动',
+    },
+}
+
+
 class VolatilityPredictor:
     """波动率预测器"""
 
@@ -96,12 +244,23 @@ class VolatilityPredictor:
             # 获取特征贡献度
             contributions = []
             for i, col in enumerate(X.columns):
-                contributions.append({
+                shap_val = float(shap_values[0, i])
+                feature_val = float(X.iloc[0, i])
+                
+                # 获取特征语义信息
+                semantics = FEATURE_SEMANTICS.get(col, {})
+                
+                contribution = {
                     'feature': col,
-                    'value': float(X.iloc[0, i]),
-                    'shap_value': float(shap_values[0, i]),
-                    'contribution_pct': 0  # 后面计算
-                })
+                    'value': feature_val,
+                    'shap_value': shap_val,
+                    'contribution_pct': 0,  # 后面计算
+                    # 特征语义信息（供智能体使用）
+                    'feature_name': semantics.get('name', col),
+                    'feature_meaning': semantics.get('meaning', ''),
+                    'impact_description': semantics.get('impact', ''),
+                }
+                contributions.append(contribution)
 
             # 按绝对贡献排序
             contributions.sort(key=lambda x: abs(x['shap_value']), reverse=True)

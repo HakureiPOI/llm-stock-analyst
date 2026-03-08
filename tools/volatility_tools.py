@@ -96,7 +96,7 @@ def compare_index_volatility(ts_codes: str, days: int = 300) -> str:
 
     for code in codes:
         try:
-            result = predictor.predict(code, days=days, include_garch=True, include_shap=False)
+            result = predictor.predict(code, days=days, include_garch=True, include_shap=True)
             results.append({
                 "ts_code": code,
                 "index_name": COMMON_INDICES.get(code, code),
@@ -105,6 +105,7 @@ def compare_index_volatility(ts_codes: str, days: int = 300) -> str:
                 "percentile": result['percentile'],
                 "volatility_trend": result.get('volatility_trend'),
                 "semantic_metrics": result.get('semantic_metrics'),
+                "shap_analysis": result.get('shap_analysis'),
             })
         except Exception:
             continue
