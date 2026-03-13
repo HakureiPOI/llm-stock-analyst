@@ -1,9 +1,13 @@
 # venv
 venv/
 
-# pycache
+# Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
 
 # dotenv
 .env
@@ -14,3 +18,22 @@ __pycache__/
 # ml data and models
 ml/dataset/
 ml/models/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+.commit_message.txt
+*.tmp
